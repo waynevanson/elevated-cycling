@@ -1,0 +1,18 @@
+services:
+  backend:
+    build:
+      target: backend-development
+    volumes:
+      - ./:/app
+    ports:
+      - 3000:3000
+  database:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: example
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8080:8080

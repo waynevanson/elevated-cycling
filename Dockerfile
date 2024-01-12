@@ -9,7 +9,7 @@ WORKDIR /app/
 COPY ./ ./
 
 # Development 
-FROM base as development
+FROM base as backend-development
 VOLUME [ "/app" ]
 CMD ["pnpm", "run", "serve"]
 

@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "dev": "docker compose --file docker-compose.dev.yaml up --build backend",
     "build": "pnpm run --recursive build",
     "serve": "pnpm run --parallel serve",
     "start": "pnpm run --recursive start"
