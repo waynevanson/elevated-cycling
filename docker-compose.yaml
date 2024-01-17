@@ -1,7 +1,10 @@
 services:
   backend:
+    depends_on:
+      - database
+      - open-elevation
     build:
-      target: backend-development
+      target: server
     volumes:
       - ./:/app
     ports:
@@ -16,6 +19,8 @@ services:
       - postgres-database:/var/lib/postgres/data
 
   adminer:
+    depends_on:
+      - database
     image: adminer
     restart: always
     ports:
