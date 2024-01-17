@@ -4,7 +4,7 @@ FROM openelevation/open-elevation as open-elevation
 WORKDIR /code
 RUN ./download-srtm-data.sh
 RUN ./create-dataset.sh
-RUN command: stdbuf -i0 -o0 -e0 python3 server.python3
+CMD stdbuf -i0 -o0 -e0 python3 server.python3
 
 # Download planet.osm.pbf for map data that we can traverse.
 # If you already have this file you can skip the download and copy the file to `/data.osm.pbf`.
