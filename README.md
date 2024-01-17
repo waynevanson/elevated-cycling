@@ -15,7 +15,8 @@ Currenlty run as a dev environment with file watching servers because I don't pl
 2. Clone repository locally.
 3. From the root of the repository, run the `docker-compose up`.
 4. Run the following command, subsituting values in the body with your parameters:
-   ```sh
-   curl --request=GET --header='ContentType: application/json' http://localhost:3000/api/circuit/downhill\
-   --data='{ "longtitude": 0.0, "latitude": 0.0, "radius": 50}'
-   ```
+
+```sh
+curl --request=GET --header='ContentType: application/json' http://localhost:3000/api/circuit/downhill \
+--data='{ "longitude": 0.0, "latitude": 0.0, "radius": 50}'
+```
