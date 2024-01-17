@@ -1,7 +1,9 @@
 services:
   backend:
     build:
-      target: backend-production
+      target: backend-development
+    volumes:
+      - ./:/app
     ports:
       - 3000:3000
   database:
