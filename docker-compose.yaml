@@ -6,13 +6,34 @@ services:
       - ./:/app
     ports:
       - 3000:3000
+
   database:
     image: postgres
     restart: always
     environment:
       POSTGRES_PASSWORD: example
+    volumes:
+      - postgres-database:/var/lib/postgres/data
+
   adminer:
     image: adminer
     restart: always
     ports:
       - 8080:8080
+
+  open-elevation:
+    build:
+      target: open-elevation
+    restart: always
+    volumes:
+      - open-elevation-data:/code/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    # command: stdbuf -i0 -o0 -e0 python3 server.python3
+    ports:
+      - 5000:8080
+
+volumes:
+  postgres-database:
+  open-elevation-data:
+

@@ -1,32 +1,24 @@
-FROM node:20-slim AS base
+# The Open Elevation API we use to calculate how high segments of a path are.
+# We need to bootstrap so that we download the data and run the processing steps for the API to understand.
+FROM openelevation/open-elevation as open-elevation
+WORKDIR /code
+RUN ./download-srtm-data.sh
+RUN ./create-dataset.sh
 
-# Setup PNPM
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
+# Download planet.osm.pbf for map data that we can traverse.
+FROM debian as planet-osm
+RUN apt-get update
+RUN apt-get install -y curl
+RUN curl 'https://download.bbbike.org/osm/planet/planet-latest.osm.pbf' -O '/data.osm.pbf'
 
+FROM rust as server-build
 WORKDIR /app/
-COPY ./ ./
+RUN \
+    cargo install --frozen && \
+    cargo build --release elevation
 
-# Development 
-FROM base as backend-development
-VOLUME [ "/app" ]
-CMD ["pnpm", "run", "serve"]
-
-# Install production dependencies only
-FROM base AS dependencies-production
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --frozen-lockfile
-
-# Create the build
-FROM base AS build
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
-RUN pnpm run build
-
-# Production
-FROM base as backend-production
-COPY --from=dependencies-production /app/node_modules /app/node_modules
-COPY --from=build /app/packages/backend/dist /app/dist
-EXPOSE 3000
-CMD ["pnpm", "run", "start"]
+FROM rust as server
+VOLUME [ "/data", "/app"]
+CMD cargo watch -x run --release elevation -- /data.osm.pbf
 
 
