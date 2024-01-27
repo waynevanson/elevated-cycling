@@ -102,25 +102,6 @@ pub trait IntoCyclableNodes {
     ) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>>;
 }
 
-trait Inpsection<T> {
-    fn inspect<F>(self, f: F) -> Self
-    where
-        F: FnOnce(&T);
-}
-
-impl<T> Inpsection<T> for Option<T> {
-    fn inspect<F>(self, f: F) -> Self
-    where
-        F: FnOnce(&T),
-    {
-        if let Some(ref x) = self {
-            f(x);
-        }
-
-        self
-    }
-}
-
 impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
     fn into_cyclable_nodes(
         self,
