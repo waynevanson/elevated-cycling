@@ -1,7 +1,7 @@
 use geo::{haversine_distance::HaversineDistance, Point};
 use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::{graphmap::GraphMap, Undirected};
-use std::{collections::HashMap, io::Read, iter::Inspect};
+use std::{collections::HashMap, io::Read};
 
 type NodeId = i64;
 
