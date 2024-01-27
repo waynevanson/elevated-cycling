@@ -59,10 +59,6 @@ pub async fn lookup_elevation(
 ) -> Vec<LocationAndElevation> {
     let url = "http://open-elevation:8080/api/v1/lookup";
 
-    let stringified = serde_json::to_string_pretty(body).unwrap();
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/elevation-request.json");
-    std::fs::write(path, stringified).unwrap();
-
     let response = client
         .post(url)
         .json(body)
