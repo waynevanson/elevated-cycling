@@ -118,11 +118,7 @@ impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
                 .flat_map(|way| way.refs())
                 .filter(|way_node_id| points_by_node_id.contains_key(&way_node_id))
                 .scan(None, |state: &mut Option<NodeId>, node_id_to| {
-                    let item = if let Some(node_id_from) = state {
-                        Some((*node_id_from, node_id_to, ()))
-                    } else {
-                        None
-                    };
+                    let item = state.map(|node_id_from| (node_id_from, node_id_to, ()));
                     *state = Some(node_id_to);
                     Some(item)
                 })
