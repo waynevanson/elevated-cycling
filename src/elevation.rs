@@ -39,3 +39,21 @@ pub async fn lookup_elevation(client: Client, locations: &Vec<&Point>) -> Vec<Lo
         .unwrap()
         .locations
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use geo::Point;
+
+    #[test]
+    fn transform_locations_into_pipe_separated() {
+        let coords = [(32.0, 2.0), (99.9, 322.1)]
+            .into_iter()
+            .map(Point::from)
+            .collect_vec();
+        let locations = coords.iter().collect_vec();
+        let string = from_locations_into_string(&locations);
+
+        assert_eq!(string, "32,2|99.9,322.1");
+    }
+}
