@@ -3,7 +3,7 @@ mod elevation;
 
 use crate::{
     algo::{join_nodes_into_graph, IntoPointsByNodeId},
-    elevation::lookup_elevation,
+    elevation::{lookup_elevation, ElevationLocation, ElevationRequestBody},
 };
 use axum::{response::Json, routing::get, Router};
 use clap::Parser;
@@ -28,7 +28,7 @@ struct CircuitDownHillRequest {
 
 #[derive(Debug, Clone, Serialize)]
 struct CircuitDownHillResponse {
-    coordinates: Vec<(f32, f32)>,
+    coordinates: Vec<(f64, f64)>,
 }
 
 #[tokio::main]
@@ -54,9 +54,10 @@ async fn main() {
         let locations = graph
             .nodes()
             .filter_map(|node_id| nodes.get(&node_id))
+            .map(ElevationLocation::from)
             .collect::<Vec<_>>();
 
-        let elevations = lookup_elevation(client, &locations).await;
+        let elevations = lookup_elevation(client, &ElevationRequestBody::from(locations)).await;
 
         Json(CircuitDownHillResponse {
             coordinates: vec![],
