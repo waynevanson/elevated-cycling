@@ -31,7 +31,7 @@ services:
   open-elevation:
     image: ghcr.io/waynevanson/open-elevation:main
     volumes:
-      - open-elevation-data:/data/tiles
+      - open-elevation-data:/data
     ports:
       - 9000:8080
 
