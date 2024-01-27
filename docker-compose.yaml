@@ -2,7 +2,6 @@ services:
   backend:
     restart: always
     depends_on:
-      - database
       - open-elevation
     build:
       target: server
@@ -21,6 +20,5 @@ services:
 
 volumes:
   backend-planet-osm-pbf:
-  postgres-database:
   open-elevation-data:
 

@@ -1,7 +1,7 @@
 use geo::{haversine_distance::HaversineDistance, Point};
 use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::{graphmap::GraphMap, Undirected};
-use std::{collections::HashMap, hash::Hash, io::Read};
+use std::{collections::HashMap, io::Read, iter::Inspect};
 
 type NodeId = i64;
 
@@ -80,11 +80,11 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
                     }
                     _ => None,
                 }
-                .filter(|(_, coordinate)| coordinate.haversine_distance(origin) < radius_km)
-                .map_or_else(
-                    || HashMap::new(),
-                    |coordinate| HashMap::from_iter([coordinate]),
-                )
+                .filter(|(_, coordinate)| {
+                    coordinate.haversine_distance(origin) < radius_km * 1000.0
+                })
+                .map(|coordinate| HashMap::from_iter([coordinate]))
+                .unwrap_or_default()
             },
             || HashMap::new(),
             |mut accu, curr| {
@@ -102,6 +102,25 @@ pub trait IntoCyclableNodes {
     ) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>>;
 }
 
+trait Inpsection<T> {
+    fn inspect<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&T);
+}
+
+impl<T> Inpsection<T> for Option<T> {
+    fn inspect<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&T),
+    {
+        if let Some(ref x) = self {
+            f(x);
+        }
+
+        self
+    }
+}
+
 impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
     fn into_cyclable_nodes(
         self,
@@ -114,19 +133,20 @@ impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
                     _ => None,
                 }
                 .filter(|way| way.tags().is_cyclable())
-                .map(|way| {
-                    way.refs()
-                        .filter(|way_node_id| points_by_node_id.contains_key(&way_node_id))
-                        .scan(None, |state: &mut Option<NodeId>, item| {
-                            if let Some(previous) = state {
-                                Some((*previous, item, &()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<GraphMap<NodeId, (), Undirected>>()
+                .into_iter()
+                .flat_map(|way| way.refs())
+                .filter(|way_node_id| points_by_node_id.contains_key(&way_node_id))
+                .scan(None, |state: &mut Option<NodeId>, node_id_to| {
+                    let item = if let Some(node_id_from) = state {
+                        Some((*node_id_from, node_id_to, ()))
+                    } else {
+                        None
+                    };
+                    *state = Some(node_id_to);
+                    Some(item)
                 })
-                .unwrap_or_default()
+                .flatten()
+                .collect::<GraphMap<NodeId, (), Undirected>>()
             },
             || GraphMap::default(),
             |mut accu, curr| {
@@ -134,5 +154,47 @@ impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
                 accu
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::osm_pbf::IntoCyclableNodes;
+
+    use super::IntoPointsByNodeId;
+    use geo::Point;
+    use itertools::Itertools;
+    use osmpbf::ElementReader;
+    use std::collections::HashMap;
+
+    #[test]
+    fn should_have_some_nodes_available() {
+        let origin = Point::from((-38.03073, 145.32790));
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/map.osm.pbf");
+        let result = ElementReader::from_path(path)
+            .unwrap()
+            .into_points_by_node_id_within_range(&origin, 10.0)
+            .unwrap();
+
+        assert_ne!(result, HashMap::new());
+    }
+
+    #[test]
+    fn should_create_graph() {
+        let origin = Point::from((-38.03073, 145.32790));
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/map.osm.pbf");
+        let point_by_node_id = ElementReader::from_path(path)
+            .unwrap()
+            .into_points_by_node_id_within_range(&origin, 10.0)
+            .unwrap();
+
+        let result = ElementReader::from_path(path)
+            .unwrap()
+            .into_cyclable_nodes(&point_by_node_id)
+            .unwrap()
+            .nodes()
+            .collect_vec();
+
+        assert_ne!(result, Vec::<i64>::new());
     }
 }
