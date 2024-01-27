@@ -1,5 +1,6 @@
 services:
   backend:
+    restart: always
     depends_on:
       - database
       - open-elevation
@@ -7,6 +8,7 @@ services:
       target: server
     volumes:
       - ./:/app
+      - backend-planet-osm-pbf:/data
     ports:
       - 3000:3000
 
@@ -27,18 +29,14 @@ services:
       - 8080:8080
 
   open-elevation:
-    build:
-      target: open-elevation
-    restart: always
+    image: ghcr.io/waynevanson/open-elevation:main
     volumes:
-      - open-elevation-data:/code/data
-    environment:
-      - PYTHONUNBUFFERED=1
-    # command: stdbuf -i0 -o0 -e0 python3 server.python3
+      - open-elevation-data:/data/tiles
     ports:
-      - 5000:8080
+      - 9000:8080
 
 volumes:
+  backend-planet-osm-pbf:
   postgres-database:
   open-elevation-data:
 
