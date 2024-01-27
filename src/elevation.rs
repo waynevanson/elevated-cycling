@@ -50,7 +50,6 @@ pub async fn lookup_elevation(
 ) -> Vec<LocationAndElevation> {
     let url = format!("http://open-elevation:8080/api/v1/lookup");
 
-    println!("{:?}", &body);
     let response = client
         .post(url)
         .json(body)

@@ -17,8 +17,10 @@ services:
       - open-elevation-data:/data
     ports:
       - 9000:8080
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: stdbuf -i0 -o0 -e0 python3 server.py
 
 volumes:
   backend-planet-osm-pbf:
   open-elevation-data:
-
