@@ -8,6 +8,7 @@ use crate::{
 use axum::{response::Json, routing::get, Router};
 use clap::Parser;
 use geo::Point;
+use itertools::Itertools;
 use osmpbf::ElementReader;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -46,13 +47,16 @@ async fn main() {
             .into_cyclable_nodes(&points_by_node_id)
             .unwrap();
 
-        let locations = graph
+        let elevation_bodies = graph
             .nodes()
             .filter_map(|node_id| points_by_node_id.get(&node_id))
-            .map(ElevationLocation::from)
+            .chunks(1_000)
+            .into_iter()
+            .map(|chunk| chunk.map(ElevationLocation::from).collect::<Vec<_>>())
+            .map(ElevationRequestBody::from)
             .collect::<Vec<_>>();
 
-        let elevations = lookup_elevation(client, &ElevationRequestBody::from(locations)).await;
+        let _elevations = lookup_elevation(client, &elevation_bodies[0]).await;
 
         Json(CircuitDownHillResponse {
             coordinates: vec![],
