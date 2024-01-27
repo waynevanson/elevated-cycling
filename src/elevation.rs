@@ -24,22 +24,31 @@ pub struct ElevationRequestBody {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LocationAndElevation {
+pub struct LocationAndElevationSuccess {
     pub latitude: f64,
     pub longitude: f64,
     pub elevation: f64,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ElevationResponseSuccess {
-    locations: Vec<LocationAndElevation>,
+pub struct LocationAndElevationError {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub error: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum LocationAndElevation {
+    Success(LocationAndElevationSuccess),
+    Error(LocationAndElevationError),
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ElevationResponse {
     #[serde(rename = "results")]
-    Success(ElevationResponseSuccess),
+    Success(Vec<LocationAndElevation>),
     Error(String),
 }
 
@@ -48,7 +57,11 @@ pub async fn lookup_elevation(
     client: Client,
     body: &ElevationRequestBody,
 ) -> Vec<LocationAndElevation> {
-    let url = format!("http://open-elevation:8080/api/v1/lookup");
+    let url = "http://open-elevation:8080/api/v1/lookup";
+
+    let stringified = serde_json::to_string_pretty(body).unwrap();
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/elevation-request.json");
+    std::fs::write(path, stringified).unwrap();
 
     let response = client
         .post(url)
@@ -61,7 +74,7 @@ pub async fn lookup_elevation(
         .unwrap();
 
     match response {
-        ElevationResponse::Success(success) => success.locations,
+        ElevationResponse::Success(success) => success,
         error => panic!("{:?}", error),
     }
 }
