@@ -1,9 +1,9 @@
-mod algo;
 mod elevation;
+mod osm_pbf;
 
 use crate::{
-    algo::{join_nodes_into_graph, IntoPointsByNodeId},
     elevation::{lookup_elevation, ElevationLocation, ElevationRequestBody},
+    osm_pbf::{IntoCyclableNodes, IntoPointsByNodeId},
 };
 use axum::{response::Json, routing::get, Router};
 use clap::Parser;
@@ -11,7 +11,6 @@ use geo::Point;
 use osmpbf::ElementReader;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Parser)]
@@ -37,23 +36,19 @@ async fn main() {
     let client = Client::new();
     let create_elements = move || ElementReader::from_path(&file_path).unwrap();
 
-    let db_pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect("postgres://postgres:example@database:5432")
-        .await
-        .unwrap();
-
     let handler = |Json(request): Json<CircuitDownHillRequest>| async move {
         let origin = Point::from((request.latitude, request.longitude));
-        let nodes = create_elements()
-            .into_points_by_id_within_range(&origin, request.max_radius)
+        let points_by_node_id = create_elements()
+            .into_points_by_node_id_within_range(&origin, request.max_radius)
             .unwrap();
 
-        let graph = join_nodes_into_graph(create_elements(), &nodes).unwrap();
+        let graph = create_elements()
+            .into_cyclable_nodes(&points_by_node_id)
+            .unwrap();
 
         let locations = graph
             .nodes()
-            .filter_map(|node_id| nodes.get(&node_id))
+            .filter_map(|node_id| points_by_node_id.get(&node_id))
             .map(ElevationLocation::from)
             .collect::<Vec<_>>();
 

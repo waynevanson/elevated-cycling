@@ -1,5 +1,5 @@
 use geo::{haversine_distance::HaversineDistance, Point};
-use osmpbf::{Element, ElementReader, TagIter, WayRefIter};
+use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::{graphmap::GraphMap, Undirected};
 use std::{collections::HashMap, hash::Hash, io::Read};
 
@@ -58,7 +58,7 @@ fn cyclable_way(pair: (&str, &str)) -> bool {
 }
 
 pub trait IntoPointsByNodeId {
-    fn into_points_by_id_within_range(
+    fn into_points_by_node_id_within_range(
         self,
         origin: &Point,
         radius_km: f64,
@@ -66,7 +66,7 @@ pub trait IntoPointsByNodeId {
 }
 
 impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
-    fn into_points_by_id_within_range(
+    fn into_points_by_node_id_within_range(
         self,
         origin: &Point,
         radius_km: f64,
@@ -95,59 +95,44 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
     }
 }
 
-pub trait IntoUndirectedGraph<I>
-where
-    Self: Iterator,
-    I: Copy + Hash + Ord,
-{
-    fn into_undirected_graph_map(self) -> GraphMap<I, (), Undirected>;
+pub trait IntoCyclableNodes {
+    fn into_cyclable_nodes(
+        self,
+        points_by_node_id: &HashMap<NodeId, Point>,
+    ) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>>;
 }
 
-// we could probably use (N,N,&E) as iterator item but this is intuitively easier.
-impl<I, T> IntoUndirectedGraph<I> for T
-where
-    T: Iterator<Item = I>,
-    I: Copy + Hash + Ord,
-{
-    fn into_undirected_graph_map(self) -> GraphMap<I, (), Undirected> {
-        self.fold(
-            (GraphMap::new(), None),
-            |(mut graph_map, previous), curr_node_id| {
-                if let Some(prev_node_id) = previous {
-                    graph_map.add_edge(prev_node_id, curr_node_id, ());
-                } else {
-                    graph_map.add_node(curr_node_id);
+impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
+    fn into_cyclable_nodes(
+        self,
+        points_by_node_id: &HashMap<NodeId, Point>,
+    ) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>> {
+        self.par_map_reduce(
+            |element| {
+                match element {
+                    Element::Way(way) => Some(way),
+                    _ => None,
                 }
-
-                return (graph_map, Some(curr_node_id));
+                .filter(|way| way.tags().is_cyclable())
+                .map(|way| {
+                    way.refs()
+                        .filter(|way_node_id| points_by_node_id.contains_key(&way_node_id))
+                        .scan(None, |state: &mut Option<NodeId>, item| {
+                            if let Some(previous) = state {
+                                Some((*previous, item, &()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<GraphMap<NodeId, (), Undirected>>()
+                })
+                .unwrap_or_default()
+            },
+            || GraphMap::default(),
+            |mut accu, curr| {
+                accu.extend(curr.all_edges());
+                accu
             },
         )
-        .0
     }
-}
-
-pub fn join_nodes_into_graph<R: Read + Send>(
-    elements: ElementReader<R>,
-    points_by_node_id: &HashMap<NodeId, Point>,
-) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>> {
-    elements.par_map_reduce(
-        |element| {
-            match element {
-                Element::Way(way) => Some(way),
-                _ => None,
-            }
-            .filter(|way| way.tags().is_cyclable())
-            .map(|way| {
-                way.refs()
-                    .filter(|way_node_id| points_by_node_id.contains_key(&way_node_id))
-                    .into_undirected_graph_map()
-            })
-            .unwrap_or_default()
-        },
-        || GraphMap::default(),
-        |mut accu, curr| {
-            accu.extend(curr.all_edges());
-            accu
-        },
-    )
 }

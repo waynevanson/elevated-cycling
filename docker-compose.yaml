@@ -12,22 +12,6 @@ services:
     ports:
       - 3000:3000
 
-  database:
-    image: postgres
-    restart: always
-    environment:
-      POSTGRES_PASSWORD: example
-    volumes:
-      - postgres-database:/var/lib/postgres/data
-
-  adminer:
-    depends_on:
-      - database
-    image: adminer
-    restart: always
-    ports:
-      - 8080:8080
-
   open-elevation:
     image: ghcr.io/waynevanson/open-elevation:main
     volumes:
