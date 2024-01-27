@@ -28,7 +28,6 @@ fn from_locations_into_string(locations: &Vec<&Point>) -> String {
 pub async fn lookup_elevation(client: Client, locations: &Vec<&Point>) -> Vec<Location> {
     let params = from_locations_into_string(locations);
     let url = format!("http://open-elevation:8080/api/v1/lookup?locations={params}");
-    println!("{url}");
     client
         .get(url)
         .send()
