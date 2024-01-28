@@ -3,7 +3,7 @@ use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::{graphmap::GraphMap, Undirected};
 use std::{collections::HashMap, io::Read};
 
-type NodeId = i64;
+pub type NodeId = i64;
 
 pub trait IsCyclable {
     fn is_cyclable(self) -> bool;
