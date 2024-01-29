@@ -10,8 +10,8 @@ pub struct ElevationLocation {
     pub longitude: f64,
 }
 
-impl From<&Point> for ElevationLocation {
-    fn from(value: &Point) -> Self {
+impl From<Point> for ElevationLocation {
+    fn from(value: Point) -> Self {
         Self {
             latitude: value.0.x,
             longitude: value.0.y,
@@ -24,16 +24,14 @@ pub struct ElevationRequestBody {
     locations: Vec<ElevationLocation>,
 }
 
-impl<'a> FromIterator<&'a Point> for ElevationRequestBody {
-    fn from_iter<T: IntoIterator<Item = &'a Point>>(iter: T) -> Self {
+impl FromIterator<Point> for ElevationRequestBody {
+    fn from_iter<T: IntoIterator<Item = Point>>(iter: T) -> Self {
         ElevationRequestBody::from(iter.into_iter().map(ElevationLocation::from).collect_vec())
     }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LocationAndElevationSuccess {
-    // pub latitude: f64,
-    // pub longitude: f64,
     pub elevation: f64,
 }
 

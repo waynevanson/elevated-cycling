@@ -400,6 +400,8 @@ dependencies = [
  "derive_more",
  "futures",
  "geo",
+ "indexmap 2.1.0",
+ "indexset",
  "itertools 0.12.0",
  "osmpbf",
  "petgraph",
@@ -490,6 +492,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "ftree"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cad4eab5e0dcb2b7b80a5e779ed866ee9219a2cf7cd2a5fac26b7bb4511ddc13"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -892,6 +903,15 @@ checksum = "d530e1a18b1cb4c484e6e34556a0d948706958449fca0cab753d649f2bce3d1f"
 dependencies = [
  "equivalent",
  "hashbrown 0.14.3",
+]
+
+[[package]]
+name = "indexset"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2172dba2c1aac58e17d429d952076a687cce0841850f1cf4cd24fc50a5adb027"
+dependencies = [
+ "ftree",
 ]
 
 [[package]]

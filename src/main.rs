@@ -1,9 +1,15 @@
+mod all_simple_paths;
 mod elevation;
 mod osm_pbf;
+mod split_while;
+mod tupled_joined;
 
 use crate::{
+    all_simple_paths::IntoAllSimplePaths,
     elevation::{lookup_elevations, ElevationRequestBody},
     osm_pbf::{IntoCyclableNodes, IntoPointsByNodeId, NodeId},
+    split_while::IntoSplitWhile,
+    tupled_joined::IntoTupleJoinedIter,
 };
 use axum::{response::Json, routing::get, Router};
 use clap::Parser;
@@ -12,7 +18,7 @@ use futures::{
     prelude::*,
 };
 use geo::Point;
-use itertools::Itertools;
+use itertools::{FoldWhile, Itertools};
 use osmpbf::ElementReader;
 use petgraph::{graphmap::GraphMap, Directed};
 use reqwest::Client;
@@ -91,6 +97,31 @@ async fn main() {
             .into_points_by_node_id_within_range(&origin, request.max_radius)
             .unwrap();
 
+        let node_id_origin = points_by_node_id
+            .iter()
+            .map(|(node_id, (_, distance))| (node_id, distance))
+            .fold_while(
+                None,
+                |closest: Option<(NodeId, &f64)>, (node_id, distance)| {
+                    if *distance == 0.0 {
+                        FoldWhile::Done(Some((*node_id, distance)))
+                    } else if let Some((node_id_closest, distance_closest)) = closest {
+                        let closest = if distance < distance_closest {
+                            (*node_id, distance)
+                        } else {
+                            (node_id_closest, distance_closest)
+                        };
+
+                        FoldWhile::Continue(Some(closest))
+                    } else {
+                        FoldWhile::Continue(Some((*node_id, distance)))
+                    }
+                },
+            )
+            .into_inner()
+            .expect("Could not find an origin node_id")
+            .0;
+
         let graph_node_ids = create_elements()
             .into_cyclable_nodes(&points_by_node_id)
             .unwrap();
@@ -100,11 +131,11 @@ async fn main() {
             .filter_map(|node_id| {
                 points_by_node_id
                     .get(&node_id)
-                    .map(|point| (node_id, point))
+                    .map(|point_distance| (node_id, point_distance.0))
             })
             .chunks(1_000)
             .into_iter()
-            .map(|chunk| chunk.collect_tuples::<Vec<NodeId>, Vec<&Point>>())
+            .map(|chunk| chunk.collect_tuples::<Vec<NodeId>, Vec<_>>())
             .map(|(node_ids, points)| {
                 lookup_elevations(&client, ElevationRequestBody::from_iter(points)).map(
                     |elevations| {
@@ -132,8 +163,52 @@ async fn main() {
             .flat_map(|(from, to, gradient)| [(from, to, gradient), (to, from, -gradient)])
             .collect();
 
-        // per edge, elevations, node_id
-        // GraphMap<NodeId, Gradient, Directed>
+        let paths = graph_gradient
+            .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
+            .map(|mut path| {
+                path.push(node_id_origin);
+                path
+            });
+
+        // HashMap<Vec<NodeId>, Score>
+        // find highest score
+        // maybe chunk into up/downhills and their reward size.
+        // score chunks higher if uphill + short or downhilll + long
+
+        let path = paths.into_iter().map(|path| {
+            path.tuple_joined()
+                .flat_map(|(from, to)| graph_gradient.edge_weight(from, to))
+                .copied()
+                .split_while(
+                    || Vec::<f64>::new(),
+                    |mut splits, gradient| {
+                        if let Some(last) = splits.last().copied() {
+                            if (last > 0.0) == (gradient > 0.0) {
+                                splits.push(gradient);
+                                FoldWhile::Continue(splits)
+                            } else {
+                                FoldWhile::Done(splits)
+                            }
+                        } else {
+                            splits.push(gradient);
+                            FoldWhile::Continue(splits)
+                        }
+                    },
+                )
+                .map(|splits| {
+                    let size = splits.len() as f64;
+                    let sum = splits.into_iter().sum::<f64>();
+                    let average = sum / size;
+                    // we only know the reward depending on how far in we are.
+                    if average > 0.0 {
+                        // reward for uphill
+                    } else {
+                        // reward for downhill
+                    }
+                })
+        });
+
+        // After we figure out what a good route is, return the points
 
         Json(CircuitDownHillResponse {
             coordinates: vec![],

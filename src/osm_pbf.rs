@@ -57,12 +57,14 @@ fn cyclable_way(pair: (&str, &str)) -> bool {
     )
 }
 
+type Meters = f64;
+
 pub trait IntoPointsByNodeId {
     fn into_points_by_node_id_within_range(
         self,
         origin: &Point,
         radius_km: f64,
-    ) -> osmpbf::Result<HashMap<NodeId, Point>>;
+    ) -> osmpbf::Result<HashMap<NodeId, (Point, Meters)>>;
 }
 
 impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
@@ -70,7 +72,7 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
         self,
         origin: &Point,
         radius_km: f64,
-    ) -> osmpbf::Result<HashMap<NodeId, Point>> {
+    ) -> osmpbf::Result<HashMap<NodeId, (Point, Meters)>> {
         self.par_map_reduce(
             |element| {
                 match element {
@@ -80,9 +82,8 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
                     }
                     _ => None,
                 }
-                .filter(|(_, coordinate)| {
-                    coordinate.haversine_distance(origin) < radius_km * 1000.0
-                })
+                .map(|(node_id, point)| (node_id, (point, point.haversine_distance(origin))))
+                .filter(|(_, (_, distance))| *distance < radius_km * 1000.0)
                 .map(|coordinate| HashMap::from_iter([coordinate]))
                 .unwrap_or_default()
             },
@@ -98,14 +99,14 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
 pub trait IntoCyclableNodes {
     fn into_cyclable_nodes(
         self,
-        points_by_node_id: &HashMap<NodeId, Point>,
+        points_by_node_id: &HashMap<NodeId, (Point, Meters)>,
     ) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>>;
 }
 
 impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
     fn into_cyclable_nodes(
         self,
-        points_by_node_id: &HashMap<NodeId, Point>,
+        points_by_node_id: &HashMap<NodeId, (Point, Meters)>,
     ) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>> {
         self.par_map_reduce(
             |element| {
