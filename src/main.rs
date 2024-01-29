@@ -93,10 +93,12 @@ async fn main() {
 
     let handler = |Json(request): Json<CircuitDownHillRequest>| async move {
         let origin = Point::from((request.latitude, request.longitude));
+        println!("Getting points_by_node_id");
         let points_by_node_id = create_elements()
             .into_points_by_node_id_within_range(&origin, request.max_radius)
             .unwrap();
 
+        println!("Getting node_id_origin");
         let node_id_origin = points_by_node_id
             .iter()
             .map(|(node_id, (_, distance))| (node_id, distance))
@@ -122,10 +124,12 @@ async fn main() {
             .expect("Could not find an origin node_id")
             .0;
 
+        println!("Getting graph_node_ids");
         let graph_node_ids = create_elements()
             .into_cyclable_nodes(&points_by_node_id)
             .unwrap();
 
+        println!("Getting elevation_by_node_id");
         let elevation_by_node_id: HashMap<NodeId, Elevation> = graph_node_ids
             .nodes()
             .filter_map(|node_id| {
@@ -152,6 +156,7 @@ async fn main() {
             .flatten()
             .collect();
 
+        println!("Getting graph_gradient");
         let graph_gradient: GraphMap<NodeId, Gradient, Directed> = graph_node_ids
             .all_edges()
             .map(|(from, to, _)| {
@@ -163,56 +168,69 @@ async fn main() {
             .flat_map(|(from, to, gradient)| [(from, to, gradient), (to, from, -gradient)])
             .collect();
 
+        println!("Getting paths");
         let paths = graph_gradient
             .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
             .map(|mut path| {
                 path.push(node_id_origin);
                 path
-            });
+            })
+            .collect_vec();
+
+        // find highest elevation
 
         // HashMap<Vec<NodeId>, Score>
         // find highest score
         // maybe chunk into up/downhills and their reward size.
         // score chunks higher if uphill + short or downhilll + long
-
-        let path = paths.into_iter().map(|path| {
-            path.tuple_joined()
-                .flat_map(|(from, to)| graph_gradient.edge_weight(from, to))
-                .copied()
-                .split_while(
-                    || Vec::<f64>::new(),
-                    |mut splits, gradient| {
-                        if let Some(last) = splits.last().copied() {
-                            if (last > 0.0) == (gradient > 0.0) {
-                                splits.push(gradient);
-                                FoldWhile::Continue(splits)
+        // max height towards the start
+        // height differenced between two values
+        println!("Getting path_index");
+        let path_index = paths
+            .iter()
+            .map(|path| {
+                let size = path.len();
+                let (max, elevation) = path
+                    .into_iter()
+                    .enumerate()
+                    .reduce(
+                        |(accu_index, accu_elevation), (curr_index, curr_elevation)| {
+                            if accu_elevation >= curr_elevation {
+                                (accu_index, accu_elevation)
                             } else {
-                                FoldWhile::Done(splits)
+                                (curr_index, curr_elevation)
                             }
-                        } else {
-                            splits.push(gradient);
-                            FoldWhile::Continue(splits)
-                        }
-                    },
-                )
-                .map(|splits| {
-                    let size = splits.len() as f64;
-                    let sum = splits.into_iter().sum::<f64>();
-                    let average = sum / size;
-                    // we only know the reward depending on how far in we are.
-                    if average > 0.0 {
-                        // reward for uphill
-                    } else {
-                        // reward for downhill
-                    }
-                })
-        });
+                        },
+                    )
+                    .unwrap();
+
+                let uphill_factor = (max + 1) / (size + 1);
+
+                uphill_factor
+            })
+            .enumerate()
+            .reduce(|(accu_index, accu_factor), (curr_index, curr_factor)| {
+                if accu_factor >= curr_factor {
+                    (accu_index, accu_factor)
+                } else {
+                    (curr_index, curr_factor)
+                }
+            })
+            .unwrap()
+            .0;
+
+        println!("Getting path");
+        let path = paths
+            .get(path_index)
+            .unwrap()
+            .iter()
+            .flat_map(|node_id| points_by_node_id.get(node_id))
+            .map(|(point, _)| point.x_y())
+            .collect_vec();
 
         // After we figure out what a good route is, return the points
 
-        Json(CircuitDownHillResponse {
-            coordinates: vec![],
-        })
+        Json(CircuitDownHillResponse { coordinates: path })
     };
 
     // build our application with a route
