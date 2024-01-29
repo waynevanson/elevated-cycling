@@ -19,10 +19,10 @@ use futures::{
 };
 use geo::Point;
 use itertools::{FoldWhile, Itertools};
-use osmpbf::ElementReader;
-use petgraph::{graphmap::GraphMap, Directed};
+use osmpbf::{ElementReader, Node};
+use petgraph::{graph, graphmap::GraphMap, Directed};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Debug, Clone, Parser)]
@@ -39,7 +39,28 @@ struct CircuitDownHillRequest {
 
 #[derive(Debug, Clone, Serialize)]
 struct CircuitDownHillResponse {
-    coordinates: Vec<(f64, f64)>,
+    #[serde(serialize_with = "serialize_points")]
+    coordinates: Vec<Point>,
+}
+
+fn serialize_points<S>(points: &Vec<Point>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    points
+        .into_iter()
+        .map(|point| {
+            [
+                point.x().to_string(),
+                ",".to_string(),
+                point.y().to_string(),
+            ]
+            .into_iter()
+            .collect::<String>()
+        })
+        .intersperse(" ".to_string())
+        .collect::<String>()
+        .serialize(serializer)
 }
 
 trait CollectTuples<A, B> {
@@ -84,6 +105,31 @@ impl<T> IntoJoinAll for T where T: IntoIterator + Sized {}
 
 type Gradient = f64;
 type Elevation = f64;
+
+fn get_uphill_factor<'a>(
+    path: &Vec<NodeId>,
+    get_gradient_by_node_id: impl Fn(NodeId, NodeId) -> Option<&'a Gradient>,
+) -> Option<usize> {
+    let size = path.len();
+    let max_position = path
+        .iter()
+        .copied()
+        .tuple_joined()
+        .flat_map(|(from, to)| get_gradient_by_node_id(from, to))
+        .enumerate()
+        .reduce(
+            |(accu_index, accu_elevation), (curr_index, curr_elevation)| {
+                if accu_elevation >= curr_elevation {
+                    (accu_index, accu_elevation)
+                } else {
+                    (curr_index, curr_elevation)
+                }
+            },
+        )?
+        .0;
+
+    max_position.checked_div(size)
+}
 
 #[tokio::main]
 async fn main() {
@@ -174,63 +220,37 @@ async fn main() {
             .map(|mut path| {
                 path.push(node_id_origin);
                 path
-            })
-            .collect_vec();
+            });
 
-        // find highest elevation
-
-        // HashMap<Vec<NodeId>, Score>
-        // find highest score
-        // maybe chunk into up/downhills and their reward size.
-        // score chunks higher if uphill + short or downhilll + long
-        // max height towards the start
-        // height differenced between two values
-        println!("Getting path_index");
-        let path_index = paths
-            .iter()
+        // let sbuffer the height
+        println!("Getting path");
+        let path = paths
             .map(|path| {
-                let size = path.len();
-                let (max, elevation) = path
-                    .into_iter()
-                    .enumerate()
-                    .reduce(
-                        |(accu_index, accu_elevation), (curr_index, curr_elevation)| {
-                            if accu_elevation >= curr_elevation {
-                                (accu_index, accu_elevation)
-                            } else {
-                                (curr_index, curr_elevation)
-                            }
-                        },
-                    )
-                    .unwrap();
-
-                let uphill_factor = (max + 1) / (size + 1);
-
-                uphill_factor
+                let factor =
+                    get_uphill_factor(&path, |from, to| graph_gradient.edge_weight(from, to));
+                (path, factor)
             })
-            .enumerate()
-            .reduce(|(accu_index, accu_factor), (curr_index, curr_factor)| {
+            .reduce(|(accu_path, accu_factor), (curr_path, curr_factor)| {
                 if accu_factor >= curr_factor {
-                    (accu_index, accu_factor)
+                    (accu_path, accu_factor)
                 } else {
-                    (curr_index, curr_factor)
+                    (curr_path, curr_factor)
                 }
             })
             .unwrap()
             .0;
 
-        println!("Getting path");
-        let path = paths
-            .get(path_index)
-            .unwrap()
+        let points = path
             .iter()
             .flat_map(|node_id| points_by_node_id.get(node_id))
-            .map(|(point, _)| point.x_y())
+            .map(|(point, _)| point)
+            .cloned()
             .collect_vec();
 
-        // After we figure out what a good route is, return the points
-
-        Json(CircuitDownHillResponse { coordinates: path })
+        println!("BADABING BADABOOM");
+        Json(CircuitDownHillResponse {
+            coordinates: points,
+        })
     };
 
     // build our application with a route
