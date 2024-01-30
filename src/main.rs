@@ -1,6 +1,5 @@
 mod all_simple_paths;
 mod elevation;
-mod map;
 mod osm_pbf;
 mod split_while;
 mod tupled_joined;
@@ -8,7 +7,6 @@ mod tupled_joined;
 use crate::{
     all_simple_paths::IntoAllSimplePaths,
     elevation::{lookup_elevations, ElevationRequestBody},
-    map::map_handler,
     osm_pbf::{IntoCyclableNodes, IntoPointsByNodeId, NodeId},
     tupled_joined::IntoTupleJoinedIter,
 };
@@ -276,9 +274,7 @@ async fn main() {
     };
 
     // build our application with a route
-    let app = Router::new()
-        .route("/", get(handler))
-        .route("/map", get(map_handler));
+    let app = Router::new().route("/", get(handler));
 
     // run it
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

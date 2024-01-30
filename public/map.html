@@ -18,7 +18,7 @@
     <script src="https://cdn.jsdelivr.net/gh/MapBBCode/mapbbcode@1.2.0/dist/mapbbcode.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/MapBBCode/mapbbcode@1.2.0/src/layers/LayerList.js"></script>
 
-    <script language="Javascript" type="text/javascript">
+    <script language="javascript" type="text/javascript">
       var mapBBcode = new MapBBCode({
         // windowPath: "public/mapbbcode/",
         layers: "OpenStreetMap",
@@ -36,8 +36,20 @@
     </script>
   </head>
   <body>
-    <div id="map-root">{MAPBBCODE}</div>
-    <script language="javascript">
+    <div id="map-root"></div>
+    <script language="javascript" type="text/javascript">
+      const searchParams = new URLSearchParams(window.location.search)
+
+      const title = searchParams.get('title')
+      if (title != null) {
+        document.title = title
+      }
+
+      // TODO - Display message when there is no bbcode bb.
+      const mapbbcode = searchParams.get("mapbbcode")
+      const map = document.querySelector('#map-root')
+      map?.innerHTML = mapbbcode
+
       if (mapBBcode) mapBBcode.show("map-root")
     </script>
   </body>
