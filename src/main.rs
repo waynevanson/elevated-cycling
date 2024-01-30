@@ -8,7 +8,6 @@ use crate::{
     all_simple_paths::IntoAllSimplePaths,
     elevation::{lookup_elevations, ElevationRequestBody},
     osm_pbf::{IntoCyclableNodes, IntoPointsByNodeId, NodeId},
-    tupled_joined::IntoTupleJoinedIter,
 };
 use axum::{response::Json, routing::get, Router};
 use clap::Parser;
@@ -19,9 +18,9 @@ use futures::{
 use geo::Point;
 use itertools::{FoldWhile, Itertools};
 use osmpbf::ElementReader;
-use petgraph::{graphmap::GraphMap, Directed};
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
+use serde_json::json;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use url::Url;
 
@@ -106,19 +105,16 @@ trait IntoJoinAll: IntoIterator + Sized {
 
 impl<T> IntoJoinAll for T where T: IntoIterator + Sized {}
 
-type Gradient = f64;
 type Elevation = f64;
 
 fn get_uphill_factor<'a>(
     path: &Vec<NodeId>,
-    get_gradient_by_node_id: impl Fn(NodeId, NodeId) -> Option<&'a Gradient>,
+    get_elevation_by_id: impl Fn(&NodeId) -> Option<&'a Elevation>,
 ) -> Option<usize> {
     let size = path.len();
     let max_position = path
         .iter()
-        .copied()
-        .tuple_joined()
-        .flat_map(|(from, to)| get_gradient_by_node_id(from, to))
+        .map(get_elevation_by_id)
         .enumerate()
         .reduce(
             |(accu_index, accu_elevation), (curr_index, curr_elevation)| {
@@ -205,21 +201,16 @@ async fn main() {
             .flatten()
             .collect();
 
-        println!("Getting graph_gradient");
-        let graph_gradient: GraphMap<NodeId, Gradient, Directed> = graph_node_ids
-            .all_edges()
-            .map(|(from, to, _)| {
-                let from_elevation = elevation_by_node_id.get(&from).unwrap();
-                let to_elevation = elevation_by_node_id.get(&to).unwrap();
-                let gradient = from_elevation / to_elevation;
-                (from, to, gradient)
-            })
-            .flat_map(|(from, to, gradient)| [(from, to, gradient), (to, from, -gradient)])
-            .collect();
-
         println!("Getting paths");
-        let paths = graph_gradient
+        let mut path_count = 1;
+
+        let paths = graph_node_ids
             .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
+            .inspect(|path| {
+                let output = json!({ "path_count":path_count, "length": path.len() });
+                println!("{}", output);
+                path_count += 1;
+            })
             .map(|mut path| {
                 path.push(node_id_origin);
                 path
@@ -229,8 +220,7 @@ async fn main() {
         println!("Getting path");
         let path = paths
             .map(|path| {
-                let factor =
-                    get_uphill_factor(&path, |from, to| graph_gradient.edge_weight(from, to));
+                let factor = get_uphill_factor(&path, |node_id| elevation_by_node_id.get(node_id));
                 (path, factor)
             })
             .reduce(|(accu_path, accu_factor), (curr_path, curr_factor)| {
@@ -250,8 +240,7 @@ async fn main() {
             .cloned()
             .collect_vec();
 
-        println!("BADABING BADABOOM");
-        let stringified = points
+        let stringified: String = points
             .into_iter()
             .map(|point| {
                 [
@@ -263,11 +252,13 @@ async fn main() {
                 .collect::<String>()
             })
             .intersperse(" ".to_string())
-            .collect::<String>();
-        let stringified = ["[map]".to_string(), stringified, "[/map]".to_string()]
+            .collect();
+
+        let stringified: String = ["[map]".to_string(), stringified, "[/map]".to_string()]
             .into_iter()
             .collect::<String>();
-        let mut url = Url::from_str("http://localhost:3000/map").unwrap();
+
+        let mut url = Url::from_str("https://d10k44lwpk7bmb.cloudfront.net/index.html").unwrap();
         url.query_pairs_mut().append_pair("mapbbcode", &stringified);
 
         Json(url.to_string())
