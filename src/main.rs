@@ -107,11 +107,11 @@ impl<T> IntoJoinAll for T where T: IntoIterator + Sized {}
 
 type Elevation = f64;
 
-fn get_uphill_factor<'a>(
+fn get_reward_factor<'a>(
     path: &Vec<NodeId>,
     get_elevation_by_id: impl Fn(&NodeId) -> Option<&'a Elevation>,
-) -> Option<usize> {
-    let size = path.len();
+) -> f32 {
+    let size = path.len() as f32;
     let max_position = path
         .iter()
         .map(get_elevation_by_id)
@@ -124,10 +124,11 @@ fn get_uphill_factor<'a>(
                     (curr_index, curr_elevation)
                 }
             },
-        )?
-        .0;
+        )
+        .unwrap()
+        .0 as f32;
 
-    max_position.checked_div(size)
+    (size - max_position) / (size + 1.0)
 }
 
 #[tokio::main]
@@ -202,25 +203,16 @@ async fn main() {
             .collect();
 
         println!("Getting paths");
-        let mut path_count = 1;
-
         let paths = graph_node_ids
             .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
-            .inspect(|path| {
-                let output = json!({ "path_count":path_count, "length": path.len() });
-                println!("{}", output);
-                path_count += 1;
-            })
             .map(|mut path| {
                 path.push(node_id_origin);
                 path
             });
 
-        // let sbuffer the height
-        println!("Getting path");
         let path = paths
             .map(|path| {
-                let factor = get_uphill_factor(&path, |node_id| elevation_by_node_id.get(node_id));
+                let factor = get_reward_factor(&path, |node_id| elevation_by_node_id.get(node_id));
                 (path, factor)
             })
             .reduce(|(accu_path, accu_factor), (curr_path, curr_factor)| {
@@ -233,9 +225,11 @@ async fn main() {
             .unwrap()
             .0;
 
+        println!("{:?}", path);
+
         let points = path
             .iter()
-            .flat_map(|node_id| points_by_node_id.get(node_id))
+            .map(|node_id| points_by_node_id.get(node_id).unwrap())
             .map(|(point, _)| point)
             .cloned()
             .collect_vec();
