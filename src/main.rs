@@ -24,7 +24,8 @@ use osmpbf::ElementReader;
 use petgraph::{graphmap::GraphMap, Directed};
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use url::Url;
 
 #[derive(Debug, Clone, Parser)]
 struct Args {
@@ -43,6 +44,9 @@ struct CircuitDownHillResponse {
     #[serde(serialize_with = "serialize_points")]
     coordinates: Vec<Point>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+struct MapBBCode(#[serde(serialize_with = "serialize_points")] Vec<Point>);
 
 fn serialize_points<S>(points: &Vec<Point>, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -249,9 +253,26 @@ async fn main() {
             .collect_vec();
 
         println!("BADABING BADABOOM");
-        Json(CircuitDownHillResponse {
-            coordinates: points,
-        })
+        let stringified = points
+            .into_iter()
+            .map(|point| {
+                [
+                    point.x().to_string(),
+                    ",".to_string(),
+                    point.y().to_string(),
+                ]
+                .into_iter()
+                .collect::<String>()
+            })
+            .intersperse(" ".to_string())
+            .collect::<String>();
+        let stringified = ["[map]".to_string(), stringified, "[/map]".to_string()]
+            .into_iter()
+            .collect::<String>();
+        let mut url = Url::from_str("http://localhost:3000/map").unwrap();
+        url.query_pairs_mut().append_pair("mapbbcode", &stringified);
+
+        Json(url.to_string())
     };
 
     // build our application with a route
