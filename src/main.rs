@@ -12,6 +12,7 @@ use crate::{
 };
 use axum::{response::Json, routing::get, Router};
 use clap::Parser;
+use connections::connections;
 use futures::{
     future::{join_all, JoinAll},
     prelude::*,
@@ -131,25 +132,25 @@ fn get_reward_factor<'a>(
     (size - max_position) / (size + 1.0)
 }
 
-fn get_node_id_origin<'a, I>(mut iter: I) -> Option<i64>
+fn get_node_id_origin<'a, I>(mut iter: I) -> Option<&'a i64>
 where
     I: Iterator<Item = (&'a i64, &'a f64)>,
 {
     iter.fold_while(
         None,
-        |closest: Option<(NodeId, &f64)>, (node_id, distance)| {
+        |closest: Option<(&NodeId, &f64)>, (node_id, distance)| {
             if *distance == 0.0 {
-                FoldWhile::Done(Some((*node_id, distance)))
+                FoldWhile::Done(Some((node_id, distance)))
             } else if let Some((node_id_closest, distance_closest)) = closest {
                 let closest = if distance < distance_closest {
-                    (*node_id, distance)
+                    (node_id, distance)
                 } else {
                     (node_id_closest, distance_closest)
                 };
 
                 FoldWhile::Continue(Some(closest))
             } else {
-                FoldWhile::Continue(Some((*node_id, distance)))
+                FoldWhile::Continue(Some((node_id, distance)))
             }
         },
     )
@@ -171,7 +172,7 @@ async fn main() {
             .unwrap();
 
         println!("Getting node_id_origin");
-        let node_id_origin = get_node_id_origin(
+        let node_id_origin = *get_node_id_origin(
             points_by_node_id
                 .iter()
                 .map(|(node_id, (_, distance))| (node_id, distance)),
@@ -210,8 +211,10 @@ async fn main() {
             .flatten()
             .collect();
 
+        let forks_only = connections(&graph_node_ids);
+
         println!("Getting paths");
-        let paths = graph_node_ids
+        let paths = forks_only
             .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
             .map(|mut path| {
                 path.push(node_id_origin);
