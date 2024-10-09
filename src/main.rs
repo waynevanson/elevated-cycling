@@ -1,4 +1,5 @@
 mod all_simple_paths;
+mod connections;
 mod elevation;
 mod osm_pbf;
 mod split_while;
@@ -20,7 +21,6 @@ use itertools::{FoldWhile, Itertools};
 use osmpbf::ElementReader;
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
-use serde_json::json;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use url::Url;
 
@@ -131,6 +131,32 @@ fn get_reward_factor<'a>(
     (size - max_position) / (size + 1.0)
 }
 
+fn get_node_id_origin<'a, I>(mut iter: I) -> Option<i64>
+where
+    I: Iterator<Item = (&'a i64, &'a f64)>,
+{
+    iter.fold_while(
+        None,
+        |closest: Option<(NodeId, &f64)>, (node_id, distance)| {
+            if *distance == 0.0 {
+                FoldWhile::Done(Some((*node_id, distance)))
+            } else if let Some((node_id_closest, distance_closest)) = closest {
+                let closest = if distance < distance_closest {
+                    (*node_id, distance)
+                } else {
+                    (node_id_closest, distance_closest)
+                };
+
+                FoldWhile::Continue(Some(closest))
+            } else {
+                FoldWhile::Continue(Some((*node_id, distance)))
+            }
+        },
+    )
+    .into_inner()
+    .map(|a| a.0)
+}
+
 #[tokio::main]
 async fn main() {
     let file_path = Args::parse().file_path;
@@ -145,30 +171,12 @@ async fn main() {
             .unwrap();
 
         println!("Getting node_id_origin");
-        let node_id_origin = points_by_node_id
-            .iter()
-            .map(|(node_id, (_, distance))| (node_id, distance))
-            .fold_while(
-                None,
-                |closest: Option<(NodeId, &f64)>, (node_id, distance)| {
-                    if *distance == 0.0 {
-                        FoldWhile::Done(Some((*node_id, distance)))
-                    } else if let Some((node_id_closest, distance_closest)) = closest {
-                        let closest = if distance < distance_closest {
-                            (*node_id, distance)
-                        } else {
-                            (node_id_closest, distance_closest)
-                        };
-
-                        FoldWhile::Continue(Some(closest))
-                    } else {
-                        FoldWhile::Continue(Some((*node_id, distance)))
-                    }
-                },
-            )
-            .into_inner()
-            .expect("Could not find an origin node_id")
-            .0;
+        let node_id_origin = get_node_id_origin(
+            points_by_node_id
+                .iter()
+                .map(|(node_id, (_, distance))| (node_id, distance)),
+        )
+        .expect("Could not find an origin node_id");
 
         println!("Getting graph_node_ids");
         let graph_node_ids = create_elements()

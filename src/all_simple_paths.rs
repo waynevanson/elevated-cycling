@@ -39,6 +39,7 @@ where
 {
 }
 
+// I think I borrowed this from somewhere..
 pub struct AllSimplePathsIter<Graph, Collection>
 where
     Graph: NodeCount + IntoNeighborsDirected,
