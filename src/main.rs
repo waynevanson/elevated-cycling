@@ -139,7 +139,7 @@ where
     iter.fold_while(
         None,
         |closest: Option<(&NodeId, &f64)>, (node_id, distance)| {
-            if *distance == 0.0 {
+            if distance == &0.0 {
                 FoldWhile::Done(Some((node_id, distance)))
             } else if let Some((node_id_closest, distance_closest)) = closest {
                 let closest = if distance < distance_closest {
@@ -211,10 +211,10 @@ async fn main() {
             .flatten()
             .collect();
 
-        let forks_only = connections(&graph_node_ids);
+        // let forks_only = connections(&graph_node_ids);
 
         println!("Getting paths");
-        let paths = forks_only
+        let paths = graph_node_ids
             .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
             .map(|mut path| {
                 path.push(node_id_origin);
