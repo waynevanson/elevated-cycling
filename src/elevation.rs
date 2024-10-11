@@ -3,6 +3,9 @@ use geo::Point;
 use itertools::Itertools;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::traits::PartitionResults;
 
 #[derive(Debug, Serialize, From)]
 pub struct ElevationLocation {
@@ -35,7 +38,8 @@ pub struct LocationAndElevationSuccess {
     pub elevation: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Error)]
+#[error("{error}")]
 pub struct LocationAndElevationError {
     pub latitude: f64,
     pub longitude: f64,
@@ -49,6 +53,17 @@ pub enum LocationAndElevation {
     Error(LocationAndElevationError),
 }
 
+impl TryFrom<LocationAndElevation> for LocationAndElevationSuccess {
+    type Error = LocationAndElevationError;
+
+    fn try_from(value: LocationAndElevation) -> Result<Self, Self::Error> {
+        match value {
+            LocationAndElevation::Success(ok) => Ok(ok),
+            LocationAndElevation::Error(error) => Err(error),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ElevationResponse {
@@ -57,28 +72,53 @@ pub enum ElevationResponse {
     Error(String),
 }
 
-// Send request to the API and get the response back.
-pub async fn lookup_elevations(client: &Client, body: ElevationRequestBody) -> Vec<f64> {
-    let url = "http://open-elevation:8080/api/v1/lookup";
+impl TryFrom<ElevationResponse> for Vec<LocationAndElevation> {
+    type Error = String;
 
+    fn try_from(value: ElevationResponse) -> Result<Self, String> {
+        match value {
+            ElevationResponse::Success(ok) => Ok(ok),
+            ElevationResponse::Error(error) => Err(error),
+        }
+    }
+}
+
+const ELEVATION_ENDPOINT: &str = "http://open-elevation:8080/api/v1/lookup";
+
+#[derive(Debug, Error)]
+
+pub enum ElevationsError {
+    #[error("{0}")]
+    ReqwestError(#[from] reqwest::Error),
+
+    #[error("{0:?}")]
+    FailedRequest(String),
+
+    #[error("{0:?}")]
+    FailedElevation(Vec<LocationAndElevationError>),
+}
+
+pub async fn lookup_elevations(
+    client: &Client,
+    body: ElevationRequestBody,
+) -> Result<Vec<f64>, ElevationsError> {
     let response = client
-        .post(url)
+        .post(ELEVATION_ENDPOINT)
         .json(&body)
         .send()
-        .await
-        .unwrap()
+        .await?
         .json::<ElevationResponse>()
-        .await
-        .unwrap();
+        .await?;
 
-    match response {
-        ElevationResponse::Success(success) => success
-            .into_iter()
-            .map(|location_and_elevation| match location_and_elevation {
-                LocationAndElevation::Success(success) => success.elevation,
-                error => panic!("{:?}", error),
-            })
-            .collect_vec(),
-        error => panic!("{:?}", error),
-    }
+    let locations =
+        Vec::<LocationAndElevation>::try_from(response).map_err(ElevationsError::FailedRequest)?;
+
+    let elevations = locations
+        .into_iter()
+        .map(|loc_and_ele| LocationAndElevationSuccess::try_from(loc_and_ele))
+        .map(|result| result.map(|success| success.elevation))
+        .partition_results::<Vec<_>, Vec<_>>()
+        .map_err(ElevationsError::FailedElevation)?;
+
+    Ok(elevations)
 }
