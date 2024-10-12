@@ -1,5 +1,6 @@
 use indexmap::IndexSet;
 use petgraph::{
+    algo::all_simple_paths,
     visit::{IntoNeighborsDirected, NodeCount},
     Direction::Outgoing,
 };

@@ -6,13 +6,14 @@ mod osm_pbf;
 mod traits;
 
 use crate::{
+    connections::connections,
     elevation::{lookup_elevations, ElevationRequestBody},
     osm_pbf::{IntoCyclableNodes, IntoPointsByNodeId, NodeId},
 };
 use axum::{
     debug_handler,
     extract::State,
-    http::StatusCode,
+    http::{request, StatusCode},
     response::{IntoResponse, Json},
     routing::get,
     Router,
@@ -24,9 +25,9 @@ use itertools::{FoldWhile, Itertools};
 use osmpbf::ElementReader;
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
-use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use std::{collections::HashMap, io, net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 use thiserror::Error;
-use traits::{CollectTuples, IntoAllSimplePaths, IntoJoinAll, PartitionResults};
+use traits::{CollectTuples, IntoJoinAll, PartitionResults};
 use url::Url;
 
 #[derive(Debug, Clone, Parser)]
@@ -102,7 +103,7 @@ where
 {
     iter.fold_while(
         None,
-        |closest: Option<(&NodeId, &f64)>, (node_id, distance)| {
+        |closest: Option<(&'a NodeId, &'a f64)>, (node_id, distance)| {
             if distance == &0.0 {
                 FoldWhile::Done(Some((node_id, distance)))
             } else if let Some((node_id_closest, distance_closest)) = closest {
@@ -135,6 +136,9 @@ enum RequestError {
 
     #[error("{0:?}")]
     ElevationsError(Vec<ElevationsError>),
+
+    #[error("{0}")]
+    IOError(std::io::Error),
 }
 
 impl IntoResponse for RequestError {
@@ -145,21 +149,46 @@ impl IntoResponse for RequestError {
 
 #[derive(Debug, Clone)]
 pub struct RequestContext {
-    client: reqwest::Client,
-    osm_filepath: PathBuf,
+    client: Arc<reqwest::Client>,
+    file_path: Arc<PathBuf>,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), RequestError> {
+    let file_path = Arc::new(Args::parse().file_path);
+    let client = Arc::new(Client::new());
+
+    let context = RequestContext { client, file_path };
+
+    // build our application with a route
+    let app: Router<RequestContext> = Router::new().route("/", get(handler));
+
+    // run it
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .map_err(RequestError::IOError)?;
+
+    println!("listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(listener, app.with_state(context.clone()))
+        .await
+        .map_err(RequestError::IOError)?;
+
+    Ok(())
 }
 
 #[debug_handler]
 async fn handler(
-    State(context): State<RequestContext>,
+    State(arc): State<RequestContext>,
     Json(request): Json<CircuitDownHillRequest>,
 ) -> Result<String, RequestError> {
-    let create_elements = || ElementReader::from_path(&context.osm_filepath).unwrap();
+    let file_path = arc.file_path.as_ref();
+    let create_elements = || ElementReader::from_path(file_path);
 
     let origin = Point::from((request.latitude, request.longitude));
 
     let points_by_node_id =
-        create_elements().into_points_by_node_id_within_range(&origin, request.max_radius)?;
+        create_elements()?.into_points_by_node_id_within_range(&origin, request.max_radius)?;
 
     let nodes_with_distance = points_by_node_id
         .iter()
@@ -168,20 +197,16 @@ async fn handler(
     let node_id_origin =
         *get_node_id_origin(nodes_with_distance).ok_or(RequestError::NodeOriginNotFound)?;
 
-    let graph_node_ids = create_elements().into_cyclable_nodes(&points_by_node_id)?;
+    let graph_node_ids = create_elements()?.into_cyclable_nodes(&points_by_node_id)?;
 
     let elevation_by_node_id: HashMap<NodeId, Elevation> = graph_node_ids
         .nodes()
-        .filter_map(|node_id| {
-            points_by_node_id
-                .get(&node_id)
-                .map(|point_distance| (node_id, point_distance.0))
-        })
+        .filter_map(|node_id| points_by_node_id.get(&node_id).map(|pd| (node_id, pd.0)))
         .chunks(1_000)
         .into_iter()
-        .map(|chunk| chunk.collect_tuples::<Vec<NodeId>, Vec<_>>())
+        .map(|chunk| chunk.collect_tuples::<Vec<_>, Vec<_>>())
         .map(|(node_ids, points)| async {
-            lookup_elevations(&context.client, ElevationRequestBody::from_iter(points))
+            lookup_elevations(&arc.client, ElevationRequestBody::from_iter(points))
                 .await
                 .map(|elevations| {
                     node_ids
@@ -201,14 +226,26 @@ async fn handler(
 
     // let forks_only = connections(&graph_node_ids);
 
-    let paths = graph_node_ids
-        .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
-        .map(|mut path| {
-            path.push(node_id_origin);
-            path
-        });
+    // println!("${:?}", graph_node_ids);
+
+    let paths = petgraph::algo::all_simple_paths::<Vec<_>, _>(
+        &graph_node_ids,
+        node_id_origin,
+        node_id_origin,
+        0,
+        None,
+    )
+    .into_iter()
+    .map(|mut path| {
+        path.push(node_id_origin);
+        path
+    })
+    .collect_vec();
+
+    println!("{:?}", &paths);
 
     let path = paths
+        .into_iter()
         .map(|path| {
             let factor = get_reward_factor(&path, |node_id| elevation_by_node_id.get(node_id));
             (path, factor)
@@ -252,27 +289,4 @@ async fn handler(
     url.query_pairs_mut().append_pair("mapbbcode", &stringified);
 
     Ok(url.to_string())
-}
-
-#[tokio::main]
-async fn main() -> Result<(), RequestError> {
-    let file_path = Args::parse().file_path;
-    let client = Client::new();
-
-    let context = RequestContext {
-        client,
-        osm_filepath: file_path,
-    };
-
-    // build our application with a route
-    let app = Router::new().route("/", get(handler).with_state(context));
-
-    // run it
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-
-    println!("listening on {}", listener.local_addr().unwrap());
-
-    axum::serve(listener, app).await.unwrap();
-
-    Ok(())
 }

@@ -82,7 +82,7 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
                     }
                     _ => None,
                 }
-                .map(|(node_id, point)| (node_id, (point, point.haversine_distance(origin))))
+                .map(|(node_id, point)| (node_id, (point, point.haversine_distance(&origin))))
                 .filter(|(_, (_, distance))| *distance < radius_km * 1000.0)
                 .map(|coordinate| HashMap::from_iter([coordinate]))
                 .unwrap_or_default()
