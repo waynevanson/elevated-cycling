@@ -19,15 +19,14 @@ use axum::{
 use clap::Parser;
 use elevation::ElevationsError;
 use futures::lock::Mutex;
-use geo::{HaversineDistance, Within};
 use itertools::{FoldWhile, Itertools};
 use ordered_float::OrderedFloat;
 use osm_pbf::IntoPointsByNodeId;
-use osmpbf::{Element, ElementReader};
+use osmpbf::ElementReader;
 use petgraph::prelude::UnGraphMap;
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
-use std::{collections::HashMap, ops::Deref, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
 use thiserror::Error;
 use traits::{CollectTuples, IntoJoinAll, PartitionResults};
 use url::Url;
@@ -131,7 +130,7 @@ enum RequestError {
     #[error("{0}")]
     OsmPbfError(#[from] osmpbf::Error),
 
-    #[error("Expected to find the not origin")]
+    #[error("Expected to find the origin")]
     NodeOriginNotFound,
 
     #[error("Expcted the paths to contain at least 1 path")]
@@ -167,7 +166,8 @@ pub struct ServerCache {
     points_by_node_id: HashMap<NodeId, Point>,
     map: UnGraphMap<NodeId, Distance>,
     // Checks to see if we need to call the API to get the elevation for the node_id
-    elevations: HashMap<NodeId, Elevation>,
+    // todo: cache the elevation API.
+    // elevations: HashMap<NodeId, Elevation>,
 }
 
 impl ServerCache {
@@ -230,10 +230,13 @@ async fn handler<'a>(
 
             let node_ids_distances = points_by_node_id
                 .iter()
-                .map(|(node_id, (_, distance))| (node_id, distance));
+                .map(|(node_id, (_, distance))| (node_id, distance))
+                .collect_vec();
 
-            let node_origin_id =
-                *get_node_id_origin(node_ids_distances).ok_or(RequestError::NodeOriginNotFound)?;
+            println!("{:?}", node_ids_distances);
+
+            let node_origin_id = *get_node_id_origin(node_ids_distances.into_iter())
+                .ok_or(RequestError::NodeOriginNotFound)?;
 
             let map = create_elements()?.into_cyclable_nodes(&points_by_node_id)?;
 
