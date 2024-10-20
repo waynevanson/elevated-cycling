@@ -1,16 +1,16 @@
 use derive_more::From;
-use geo::Point;
 use itertools::Itertools;
+use ordered_float::OrderedFloat;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::traits::PartitionResults;
+use crate::{traits::PartitionResults, Point};
 
 #[derive(Debug, Serialize, From)]
 pub struct ElevationLocation {
-    pub latitude: f64,
-    pub longitude: f64,
+    pub latitude: OrderedFloat<f64>,
+    pub longitude: OrderedFloat<f64>,
 }
 
 impl From<Point> for ElevationLocation {

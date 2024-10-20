@@ -6,26 +6,28 @@ mod osm_pbf;
 mod traits;
 
 use crate::{
-    connections::connections,
     elevation::{lookup_elevations, ElevationRequestBody},
-    osm_pbf::{IntoCyclableNodes, IntoPointsByNodeId, NodeId},
+    osm_pbf::{IntoCyclableNodes, NodeId},
 };
 use axum::{
-    debug_handler,
     extract::State,
-    http::{request, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Json},
     routing::get,
     Router,
 };
 use clap::Parser;
 use elevation::ElevationsError;
-use geo::Point;
+use futures::lock::Mutex;
+use geo::{HaversineDistance, Within};
 use itertools::{FoldWhile, Itertools};
-use osmpbf::ElementReader;
+use ordered_float::OrderedFloat;
+use osm_pbf::IntoPointsByNodeId;
+use osmpbf::{Element, ElementReader};
+use petgraph::prelude::UnGraphMap;
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
-use std::{collections::HashMap, io, net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, ops::Deref, path::PathBuf, str::FromStr, sync::Arc};
 use thiserror::Error;
 use traits::{CollectTuples, IntoJoinAll, PartitionResults};
 use url::Url;
@@ -37,9 +39,9 @@ struct Args {
 
 #[derive(Debug, Clone, Deserialize)]
 struct CircuitDownHillRequest {
-    latitude: f64,
-    longitude: f64,
-    max_radius: f64,
+    latitude: OrderedFloat<f64>,
+    longitude: OrderedFloat<f64>,
+    max_radius: OrderedFloat<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,6 +74,7 @@ where
 }
 
 type Elevation = f64;
+pub type Point = geo::Point<OrderedFloat<f64>>;
 
 fn get_reward_factor<'a>(
     path: &Vec<NodeId>,
@@ -97,20 +100,20 @@ fn get_reward_factor<'a>(
     (size - max_position) / (size + 1.0)
 }
 
-fn get_node_id_origin<'a, I>(mut iter: I) -> Option<&'a i64>
+fn get_node_id_origin<'a, I>(mut iter: I) -> Option<&'a NodeId>
 where
-    I: Iterator<Item = (&'a i64, &'a f64)>,
+    I: Iterator<Item = (&'a NodeId, &'a OrderedFloat<f64>)>,
 {
     iter.fold_while(
         None,
-        |closest: Option<(&'a NodeId, &'a f64)>, (node_id, distance)| {
+        |closest: Option<(&'a NodeId, &'a OrderedFloat<f64>)>, (node_id, distance)| {
             if distance == &0.0 {
                 FoldWhile::Done(Some((node_id, distance)))
             } else if let Some((node_id_closest, distance_closest)) = closest {
-                let closest = if distance < distance_closest {
+                let closest = if distance < distance_closest.into() {
                     (node_id, distance)
                 } else {
-                    (node_id_closest, distance_closest)
+                    (node_id_closest, distance_closest.into())
                 };
 
                 FoldWhile::Continue(Some(closest))
@@ -147,21 +150,46 @@ impl IntoResponse for RequestError {
     }
 }
 
+type Distance = OrderedFloat<f64>;
+
 #[derive(Debug, Clone)]
 pub struct RequestContext {
-    client: Arc<reqwest::Client>,
-    file_path: Arc<PathBuf>,
+    reqwest: reqwest::Client,
+    file_path: PathBuf,
+}
+
+// So to init the points
+#[derive(Debug, Clone, Default)]
+pub struct ServerCache {
+    // Checks if we have this origin in our graph
+    // this is the hash to see if we need to read OSM because it's not in our map.
+    distances: HashMap<Point, (Distance, NodeId)>,
+    points_by_node_id: HashMap<NodeId, Point>,
+    map: UnGraphMap<NodeId, Distance>,
+    // Checks to see if we need to call the API to get the elevation for the node_id
+    elevations: HashMap<NodeId, Elevation>,
+}
+
+impl ServerCache {
+    fn get_node_id_origin(&self, origin: &Point, range: &Distance) -> Option<&NodeId> {
+        self.distances
+            .get(origin)
+            .filter(|(distance, _)| distance > range)
+            .map(|(_, node_id)| node_id)
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), RequestError> {
-    let file_path = Arc::new(Args::parse().file_path);
-    let client = Arc::new(Client::new());
+    let file_path = Args::parse().file_path;
+    let reqwest = Client::new();
 
-    let context = RequestContext { client, file_path };
+    let context = RequestContext { reqwest, file_path };
+    let cache = Arc::new(Mutex::new(ServerCache::default()));
 
     // build our application with a route
-    let app: Router<RequestContext> = Router::new().route("/", get(handler));
+    let app: Router<(RequestContext, Arc<Mutex<ServerCache>>)> =
+        Router::new().route("/", get(handler));
 
     // run it
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
@@ -170,43 +198,78 @@ async fn main() -> Result<(), RequestError> {
 
     println!("listening on {}", listener.local_addr().unwrap());
 
-    axum::serve(listener, app.with_state(context.clone()))
+    axum::serve(listener, app.with_state((context, cache)))
         .await
         .map_err(RequestError::IOError)?;
 
     Ok(())
 }
 
-#[debug_handler]
-async fn handler(
-    State(arc): State<RequestContext>,
+// really should just keep it all lazy huh...
+async fn handler<'a>(
+    State((context, mutex)): State<(RequestContext, Arc<Mutex<ServerCache>>)>,
     Json(request): Json<CircuitDownHillRequest>,
 ) -> Result<String, RequestError> {
-    let file_path = arc.file_path.as_ref();
+    let file_path = &context.file_path;
     let create_elements = || ElementReader::from_path(file_path);
 
     let origin = Point::from((request.latitude, request.longitude));
 
-    let points_by_node_id =
-        create_elements()?.into_points_by_node_id_within_range(&origin, request.max_radius)?;
+    let cache = &mut mutex.lock().await;
 
-    let nodes_with_distance = points_by_node_id
-        .iter()
-        .map(|(node_id, (_, distance))| (node_id, distance));
+    let node_id_origin = cache
+        .get_node_id_origin(&origin, &request.max_radius)
+        .copied();
 
-    let node_id_origin =
-        *get_node_id_origin(nodes_with_distance).ok_or(RequestError::NodeOriginNotFound)?;
+    // cache miss, add all the things to the cache
+    let node_id_origin = node_id_origin
+        .map(Ok::<NodeId, RequestError>)
+        .unwrap_or_else(|| {
+            let mut points_by_node_id = create_elements()?
+                .into_points_by_node_id_within_range(&origin, &request.max_radius)?;
 
-    let graph_node_ids = create_elements()?.into_cyclable_nodes(&points_by_node_id)?;
+            let node_ids_distances = points_by_node_id
+                .iter()
+                .map(|(node_id, (_, distance))| (node_id, distance));
 
-    let elevation_by_node_id: HashMap<NodeId, Elevation> = graph_node_ids
+            let node_origin_id =
+                *get_node_id_origin(node_ids_distances).ok_or(RequestError::NodeOriginNotFound)?;
+
+            let map = create_elements()?.into_cyclable_nodes(&points_by_node_id)?;
+
+            // remove unused node_ids
+            points_by_node_id.retain(|key, _| map.contains_node(*key));
+
+            // add everything to cache
+            cache.points_by_node_id.extend(
+                points_by_node_id
+                    .iter()
+                    .map(|(node_id, (point, _))| (node_id, point)),
+            );
+            cache.map.extend(map.all_edges());
+
+            Ok(node_origin_id)
+        })?;
+
+    // So we want the coordinates of each node in WAY
+    // we need to find all the nodes in range first,
+    // filter for cyclable nodes only
+
+    let elevation_by_node_id: HashMap<NodeId, Elevation> = cache
+        .map
         .nodes()
-        .filter_map(|node_id| points_by_node_id.get(&node_id).map(|pd| (node_id, pd.0)))
+        .filter_map(|node_id| {
+            cache
+                .points_by_node_id
+                .get(&node_id)
+                .map(|pd| (node_id, pd))
+        })
         .chunks(1_000)
         .into_iter()
         .map(|chunk| chunk.collect_tuples::<Vec<_>, Vec<_>>())
         .map(|(node_ids, points)| async {
-            lookup_elevations(&arc.client, ElevationRequestBody::from_iter(points))
+            // todo - elevation requests expects aour special float in response
+            lookup_elevations(&context.reqwest, ElevationRequestBody::from_iter(points))
                 .await
                 .map(|elevations| {
                     node_ids
@@ -226,10 +289,8 @@ async fn handler(
 
     // let forks_only = connections(&graph_node_ids);
 
-    // println!("${:?}", graph_node_ids);
-
     let paths = petgraph::algo::all_simple_paths::<Vec<_>, _>(
-        &graph_node_ids,
+        &cache.map,
         node_id_origin,
         node_id_origin,
         0,
@@ -241,8 +302,6 @@ async fn handler(
         path
     })
     .collect_vec();
-
-    println!("{:?}", &paths);
 
     let path = paths
         .into_iter()
@@ -262,8 +321,7 @@ async fn handler(
 
     let points = path
         .iter()
-        .map(|node_id| points_by_node_id.get(node_id).unwrap())
-        .map(|(point, _)| point)
+        .map(|node_id| cache.points_by_node_id.get(node_id).unwrap())
         .cloned()
         .collect_vec();
 

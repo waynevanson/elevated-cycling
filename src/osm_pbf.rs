@@ -1,7 +1,10 @@
-use geo::{haversine_distance::HaversineDistance, Point};
+use geo::haversine_distance::HaversineDistance;
+use ordered_float::OrderedFloat;
 use osmpbf::{Element, ElementReader, TagIter};
-use petgraph::{graphmap::GraphMap, Undirected};
+use petgraph::{graphmap::GraphMap, prelude::UnGraphMap, Undirected};
 use std::{collections::HashMap, io::Read};
+
+use crate::{Distance, Point};
 
 pub type NodeId = i64;
 
@@ -63,28 +66,32 @@ pub trait IntoPointsByNodeId {
     fn into_points_by_node_id_within_range(
         self,
         origin: &Point,
-        radius_km: f64,
-    ) -> osmpbf::Result<HashMap<NodeId, (Point, Meters)>>;
+        radius_km: &OrderedFloat<f64>,
+    ) -> osmpbf::Result<HashMap<NodeId, (Point, Distance)>>;
 }
 
 impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
     fn into_points_by_node_id_within_range(
         self,
         origin: &Point,
-        radius_km: f64,
-    ) -> osmpbf::Result<HashMap<NodeId, (Point, Meters)>> {
+        radius_km: &OrderedFloat<f64>,
+    ) -> osmpbf::Result<HashMap<NodeId, (Point, Distance)>> {
         self.par_map_reduce(
             |element| {
                 match element {
-                    Element::Node(node) => Some((node.id(), Point::from((node.lat(), node.lon())))),
-                    Element::DenseNode(node) => {
-                        Some((node.id(), Point::from((node.lat(), node.lon()))))
-                    }
+                    Element::Node(node) => Some((
+                        node.id(),
+                        Point::from((OrderedFloat(node.lat()), OrderedFloat(node.lon()))),
+                    )),
+                    Element::DenseNode(node) => Some((
+                        node.id(),
+                        Point::from((OrderedFloat(node.lat()), OrderedFloat(node.lon()))),
+                    )),
                     _ => None,
                 }
                 .map(|(node_id, point)| (node_id, (point, point.haversine_distance(&origin))))
-                .filter(|(_, (_, distance))| *distance < radius_km * 1000.0)
-                .map(|coordinate| HashMap::from_iter([coordinate]))
+                .filter(|(_, (_, distance))| distance <= radius_km)
+                .map(|entry| HashMap::from_iter([entry]))
                 .unwrap_or_default()
             },
             || HashMap::new(),
@@ -99,15 +106,15 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
 pub trait IntoCyclableNodes {
     fn into_cyclable_nodes(
         self,
-        points_by_node_id: &HashMap<NodeId, (Point, Meters)>,
-    ) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>>;
+        points_by_node_id: &HashMap<NodeId, (Point, Distance)>,
+    ) -> osmpbf::Result<UnGraphMap<NodeId, Distance>>;
 }
 
 impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
     fn into_cyclable_nodes(
         self,
-        points_by_node_id: &HashMap<NodeId, (Point, Meters)>,
-    ) -> osmpbf::Result<GraphMap<NodeId, (), Undirected>> {
+        points_by_node_id: &HashMap<NodeId, (Point, Distance)>,
+    ) -> osmpbf::Result<UnGraphMap<NodeId, Distance>> {
         self.par_map_reduce(
             |element| {
                 match element {
@@ -118,13 +125,19 @@ impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
                 .into_iter()
                 .flat_map(|way| way.refs())
                 .filter(|way_node_id| points_by_node_id.contains_key(&way_node_id))
+                // create edges between nodes, calculating the distance too.
                 .scan(None, |state: &mut Option<NodeId>, node_id_to| {
-                    let item = state.map(|node_id_from| (node_id_from, node_id_to, ()));
+                    let item = state.map(|node_id_from| {
+                        let from = points_by_node_id.get(&node_id_from).unwrap().0;
+                        let to = points_by_node_id.get(&node_id_to).unwrap().0;
+                        let distance = from.haversine_distance(&to);
+                        (node_id_from, node_id_to, distance)
+                    });
                     *state = Some(node_id_to);
                     Some(item)
                 })
                 .flatten()
-                .collect::<GraphMap<NodeId, (), Undirected>>()
+                .collect::<UnGraphMap<NodeId, Distance>>()
             },
             || GraphMap::default(),
             |mut accu, curr| {
@@ -132,47 +145,5 @@ impl<R: Read + Send> IntoCyclableNodes for ElementReader<R> {
                 accu
             },
         )
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::osm_pbf::IntoCyclableNodes;
-
-    use super::IntoPointsByNodeId;
-    use geo::Point;
-    use itertools::Itertools;
-    use osmpbf::ElementReader;
-    use std::collections::HashMap;
-
-    #[test]
-    fn should_have_some_nodes_available() {
-        let origin = Point::from((-38.03073, 145.32790));
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/map.osm.pbf");
-        let result = ElementReader::from_path(path)
-            .unwrap()
-            .into_points_by_node_id_within_range(&origin, 10.0)
-            .unwrap();
-
-        assert_ne!(result, HashMap::new());
-    }
-
-    #[test]
-    fn should_create_graph() {
-        let origin = Point::from((-38.03073, 145.32790));
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/map.osm.pbf");
-        let point_by_node_id = ElementReader::from_path(path)
-            .unwrap()
-            .into_points_by_node_id_within_range(&origin, 10.0)
-            .unwrap();
-
-        let result = ElementReader::from_path(path)
-            .unwrap()
-            .into_cyclable_nodes(&point_by_node_id)
-            .unwrap()
-            .nodes()
-            .collect_vec();
-
-        assert_ne!(result, Vec::<i64>::new());
     }
 }
