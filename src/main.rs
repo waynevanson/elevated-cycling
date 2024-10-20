@@ -48,19 +48,13 @@ struct CircuitDownHillRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct CircuitDownHillResponse {
-    #[serde(serialize_with = "serialize_points")]
-    coordinates: Vec<Point>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct MapBBCode(#[serde(serialize_with = "serialize_points")] Vec<Point>);
 
 fn serialize_points<S>(points: &Vec<Point>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    points
+    let stringified = points
         .into_iter()
         .map(|point| {
             [
@@ -72,8 +66,22 @@ where
             .collect::<String>()
         })
         .intersperse(" ".to_string())
-        .collect::<String>()
-        .serialize(serializer)
+        .collect::<String>();
+
+    let stringified: String = ["[map]".to_string(), stringified, "[/map]".to_string()]
+        .into_iter()
+        .collect::<String>();
+
+    let mut url = Url::from_str("https://d10k44lwpk7bmb.cloudfront.net/index.html").unwrap();
+    url.query_pairs_mut().append_pair("mapbbcode", &stringified);
+
+    url.to_string().serialize(serializer)
+}
+
+impl IntoResponse for MapBBCode {
+    fn into_response(self) -> axum::response::Response {
+        Json(self).into_response()
+    }
 }
 
 type Elevation = f64;
@@ -213,7 +221,7 @@ async fn main() -> Result<(), RequestError> {
 async fn handler<'a>(
     State((context, mutex)): State<(RequestContext, Arc<Mutex<ServerCache>>)>,
     Json(request): Json<CircuitDownHillRequest>,
-) -> Result<String, RequestError> {
+) -> Result<MapBBCode, RequestError> {
     let file_path = &context.file_path;
     let create_elements = || ElementReader::from_path(file_path);
 
@@ -226,6 +234,8 @@ async fn handler<'a>(
         .copied();
 
     // cache miss, add all the things to the cache
+    // consider: if we miss a big and hit a small, we're going to use EVERY node in our graph.
+    // can we cut that down?
     let node_id_origin = node_id_origin
         .inspect(|_| println!("CACHE HITT"))
         .map(Ok::<_, RequestError>)
@@ -243,7 +253,7 @@ async fn handler<'a>(
 
             let map = create_elements()?.into_cyclable_nodes(&points_by_node_id)?;
 
-            // remove unused node_ids
+            // only keep the node ids that are in the ways.
             points_by_node_id.retain(|key, _| map.contains_node(*key));
 
             // add everything to cache
@@ -252,6 +262,7 @@ async fn handler<'a>(
                     .iter()
                     .map(|(node_id, (point, _))| (node_id, point)),
             );
+
             cache.map.extend(map.all_edges());
 
             cache
@@ -261,26 +272,60 @@ async fn handler<'a>(
             Ok(node_origin_id)
         })?;
 
-    println!("{}", cache.points_by_node_id.len());
+    let elevation_by_node_id: HashMap<NodeId, Elevation> =
+        get_elevation_by_node_id(&cache.points_by_node_id, &context.reqwest).await?;
 
-    // So we want the coordinates of each node in WAY
-    // we need to find all the nodes in range first,
-    // filter for cyclable nodes only
+    let paths = petgraph::algo::all_simple_paths::<Vec<_>, _>(
+        &cache.map,
+        node_id_origin,
+        node_id_origin,
+        0,
+        None,
+    )
+    .par_bridge()
+    .map(|mut path| {
+        path.push(node_id_origin);
+        path
+    });
 
-    let elevation_by_node_id: HashMap<NodeId, Elevation> = cache
-        .map
-        .nodes()
-        .filter_map(|node_id| {
-            cache
-                .points_by_node_id
-                .get(&node_id)
-                .map(|pd| (node_id, pd))
+    let path = paths
+        .map(|path| {
+            let factor = get_reward_factor(&path, |node_id| elevation_by_node_id.get(node_id));
+            (path, factor)
         })
+        .reduce_with(|(accu_path, accu_factor), (curr_path, curr_factor)| {
+            if accu_factor >= curr_factor {
+                (accu_path, accu_factor)
+            } else {
+                (curr_path, curr_factor)
+            }
+        })
+        .ok_or(RequestError::PathsNotFound)?
+        .0;
+
+    let points = path
+        .iter()
+        .map(|node_id| cache.points_by_node_id.get(node_id).unwrap())
+        .cloned()
+        .collect_vec();
+
+    Ok(MapBBCode(points))
+}
+
+async fn get_elevation_by_node_id<'a, I>(
+    nodes: I,
+    client: &Client,
+) -> Result<HashMap<NodeId, Elevation>, RequestError>
+where
+    I: IntoIterator<Item = (&'a NodeId, &'a Point)>,
+{
+    let result = nodes
+        .into_iter()
         .chunks(1_000)
         .into_iter()
         .map(|chunk| chunk.collect_tuples::<Vec<_>, Vec<_>>())
         .map(|(node_ids, points)| async {
-            lookup_elevations(&context.reqwest, ElevationRequestBody::from_iter(points))
+            lookup_elevations(&client, ElevationRequestBody::from_iter(points))
                 .await
                 .map(|elevations| {
                     node_ids
@@ -298,68 +343,5 @@ async fn handler<'a>(
         .flatten()
         .collect();
 
-    let paths = petgraph::algo::all_simple_paths::<Vec<_>, _>(
-        &cache.map,
-        node_id_origin,
-        node_id_origin,
-        0,
-        None,
-    )
-    // .take(2000)
-    .enumerate()
-    .par_bridge()
-    .inspect(|(index, _)| println!("{index}"))
-    .map(|(_, a)| a)
-    .map(|mut path| {
-        path.push(node_id_origin);
-        path
-    });
-
-    println!("ALL SIMPLE BOTHS DONE");
-
-    let path = paths
-        .map(|path| {
-            let factor = get_reward_factor(&path, |node_id| elevation_by_node_id.get(node_id));
-            (path, factor)
-        })
-        .reduce_with(|(accu_path, accu_factor), (curr_path, curr_factor)| {
-            if accu_factor >= curr_factor {
-                (accu_path, accu_factor)
-            } else {
-                (curr_path, curr_factor)
-            }
-        })
-        .ok_or(RequestError::PathsNotFound)?
-        .0;
-
-    println!("BEST PATH DONE");
-
-    let points = path
-        .iter()
-        .map(|node_id| cache.points_by_node_id.get(node_id).unwrap())
-        .cloned()
-        .collect_vec();
-
-    let stringified: String = points
-        .into_iter()
-        .map(|point| {
-            [
-                point.x().to_string(),
-                ",".to_string(),
-                point.y().to_string(),
-            ]
-            .into_iter()
-            .collect::<String>()
-        })
-        .intersperse(" ".to_string())
-        .collect();
-
-    let stringified: String = ["[map]".to_string(), stringified, "[/map]".to_string()]
-        .into_iter()
-        .collect::<String>();
-
-    let mut url = Url::from_str("https://d10k44lwpk7bmb.cloudfront.net/index.html").unwrap();
-    url.query_pairs_mut().append_pair("mapbbcode", &stringified);
-
-    Ok(url.to_string())
+    Ok(result)
 }
