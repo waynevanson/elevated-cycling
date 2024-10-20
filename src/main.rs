@@ -7,6 +7,7 @@ mod osm_pbf;
 mod traits;
 
 use crate::{
+    connections::connections,
     elevation::{lookup_elevations, ElevationRequestBody},
     osm_pbf::{IntoCyclableNodes, NodeId},
 };
@@ -260,6 +261,8 @@ async fn handler<'a>(
             Ok(node_origin_id)
         })?;
 
+    println!("{}", cache.points_by_node_id.len());
+
     // So we want the coordinates of each node in WAY
     // we need to find all the nodes in range first,
     // filter for cyclable nodes only
@@ -277,7 +280,6 @@ async fn handler<'a>(
         .into_iter()
         .map(|chunk| chunk.collect_tuples::<Vec<_>, Vec<_>>())
         .map(|(node_ids, points)| async {
-            // todo - elevation requests expects aour special float in response
             lookup_elevations(&context.reqwest, ElevationRequestBody::from_iter(points))
                 .await
                 .map(|elevations| {
@@ -296,16 +298,22 @@ async fn handler<'a>(
         .flatten()
         .collect();
 
-    // let forks_only = connections(&graph_node_ids);
-
-    let paths = cache
-        .map
-        .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
-        .par_bridge()
-        .map(|mut path| {
-            path.push(node_id_origin);
-            path
-        });
+    let paths = petgraph::algo::all_simple_paths::<Vec<_>, _>(
+        &cache.map,
+        node_id_origin,
+        node_id_origin,
+        0,
+        None,
+    )
+    // .take(2000)
+    .enumerate()
+    .par_bridge()
+    .inspect(|(index, _)| println!("{index}"))
+    .map(|(_, a)| a)
+    .map(|mut path| {
+        path.push(node_id_origin);
+        path
+    });
 
     println!("ALL SIMPLE BOTHS DONE");
 

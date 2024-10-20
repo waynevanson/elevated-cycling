@@ -6,7 +6,7 @@ use crate::osm_pbf::NodeId;
 /// We don't only care about nodes in between when the path is really long.
 ///
 /// Each intersection node containing n forks contains 1 + n forks.
-pub fn connections(graph: &UnGraphMap<NodeId, ()>) -> UnGraphMap<NodeId, ()> {
+pub fn connections<E>(graph: &UnGraphMap<NodeId, E>) -> UnGraphMap<NodeId, ()> {
     let mut connections = UnGraphMap::default();
 
     for node in graph.nodes() {
