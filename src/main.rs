@@ -1,5 +1,6 @@
 #![feature(fn_traits, unboxed_closures, tuple_trait)]
 
+mod all_simple_paths;
 mod connections;
 mod elevation;
 mod osm_pbf;
@@ -9,6 +10,7 @@ use crate::{
     elevation::{lookup_elevations, ElevationRequestBody},
     osm_pbf::{IntoCyclableNodes, NodeId},
 };
+use all_simple_paths::IntoAllSimplePaths;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -23,7 +25,8 @@ use itertools::{FoldWhile, Itertools};
 use ordered_float::OrderedFloat;
 use osm_pbf::IntoPointsByNodeId;
 use osmpbf::ElementReader;
-use petgraph::prelude::UnGraphMap;
+use petgraph::{prelude::UnGraphMap, visit::IntoNeighbors};
+use rayon::iter::{ParallelBridge, ParallelIterator};
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
 use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Arc};
@@ -174,7 +177,7 @@ impl ServerCache {
     fn get_node_id_origin(&self, origin: &Point, range: &Distance) -> Option<&NodeId> {
         self.distances
             .get(origin)
-            .filter(|(distance, _)| distance > range)
+            .filter(|(max, _)| range <= max)
             .map(|(_, node_id)| node_id)
     }
 }
@@ -223,20 +226,19 @@ async fn handler<'a>(
 
     // cache miss, add all the things to the cache
     let node_id_origin = node_id_origin
-        .map(Ok::<NodeId, RequestError>)
+        .inspect(|_| println!("CACHE HITT"))
+        .map(Ok::<_, RequestError>)
         .unwrap_or_else(|| {
+            println!("CACHE MISS");
             let mut points_by_node_id = create_elements()?
                 .into_points_by_node_id_within_range(&origin, &request.max_radius)?;
 
             let node_ids_distances = points_by_node_id
                 .iter()
-                .map(|(node_id, (_, distance))| (node_id, distance))
-                .collect_vec();
+                .map(|(node_id, (_, distance))| (node_id, distance));
 
-            println!("{:?}", node_ids_distances);
-
-            let node_origin_id = *get_node_id_origin(node_ids_distances.into_iter())
-                .ok_or(RequestError::NodeOriginNotFound)?;
+            let node_origin_id =
+                *get_node_id_origin(node_ids_distances).ok_or(RequestError::NodeOriginNotFound)?;
 
             let map = create_elements()?.into_cyclable_nodes(&points_by_node_id)?;
 
@@ -250,6 +252,10 @@ async fn handler<'a>(
                     .map(|(node_id, (point, _))| (node_id, point)),
             );
             cache.map.extend(map.all_edges());
+
+            cache
+                .distances
+                .insert(origin, (request.max_radius, node_origin_id));
 
             Ok(node_origin_id)
         })?;
@@ -292,27 +298,23 @@ async fn handler<'a>(
 
     // let forks_only = connections(&graph_node_ids);
 
-    let paths = petgraph::algo::all_simple_paths::<Vec<_>, _>(
-        &cache.map,
-        node_id_origin,
-        node_id_origin,
-        0,
-        None,
-    )
-    .into_iter()
-    .map(|mut path| {
-        path.push(node_id_origin);
-        path
-    })
-    .collect_vec();
+    let paths = cache
+        .map
+        .into_all_simple_paths::<Vec<_>>(node_id_origin, node_id_origin, 0, None)
+        .par_bridge()
+        .map(|mut path| {
+            path.push(node_id_origin);
+            path
+        });
+
+    println!("ALL SIMPLE BOTHS DONE");
 
     let path = paths
-        .into_iter()
         .map(|path| {
             let factor = get_reward_factor(&path, |node_id| elevation_by_node_id.get(node_id));
             (path, factor)
         })
-        .reduce(|(accu_path, accu_factor), (curr_path, curr_factor)| {
+        .reduce_with(|(accu_path, accu_factor), (curr_path, curr_factor)| {
             if accu_factor >= curr_factor {
                 (accu_path, accu_factor)
             } else {
@@ -321,6 +323,8 @@ async fn handler<'a>(
         })
         .ok_or(RequestError::PathsNotFound)?
         .0;
+
+    println!("BEST PATH DONE");
 
     let points = path
         .iter()

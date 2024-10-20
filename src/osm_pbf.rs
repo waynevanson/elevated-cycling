@@ -2,7 +2,7 @@ use geo::haversine_distance::HaversineDistance;
 use ordered_float::OrderedFloat;
 use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::{graphmap::GraphMap, prelude::UnGraphMap, Undirected};
-use std::{collections::HashMap, io::Read};
+use std::{collections::HashMap, io::Read, ops::Mul};
 
 use crate::{Distance, Point};
 
@@ -74,7 +74,7 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
     fn into_points_by_node_id_within_range(
         self,
         origin: &Point,
-        radius_km: &OrderedFloat<f64>,
+        radius: &OrderedFloat<f64>,
     ) -> osmpbf::Result<HashMap<NodeId, (Point, Distance)>> {
         self.par_map_reduce(
             |element| {
@@ -90,7 +90,7 @@ impl<R: Read + Send> IntoPointsByNodeId for ElementReader<R> {
                     _ => None,
                 }
                 .map(|(node_id, point)| (node_id, (point, point.haversine_distance(&origin))))
-                .filter(|(_, (_, distance))| distance <= radius_km)
+                .filter(|(_, (_, distance))| distance <= radius)
                 .map(|entry| HashMap::from_iter([entry]))
                 .unwrap_or_default()
             },
