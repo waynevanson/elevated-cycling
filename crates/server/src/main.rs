@@ -24,7 +24,7 @@ fn main() {
         .map(|(node_id, point)| (point.x(), point.y(), node_id))
         .collect::<Vec<_>>();
 
-    connection.geo_add::<_, _, ()>("osm", members).unwrap();
+    connection.geo_add::<_, _, ()>("cyclable", members).unwrap();
 
     // add redis dockerfile to start before this
     // add this to docker image.
