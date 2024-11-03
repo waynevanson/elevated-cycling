@@ -1,0 +1,10 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+geo = "0.29.1"
+osmpbf = "0.3.4"
+rayon = "1.10.0"
+redis = "0.27.5"
