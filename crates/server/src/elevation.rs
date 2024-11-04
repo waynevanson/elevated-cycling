@@ -1,4 +1,4 @@
-use crate::partition_results::PartitionResults;
+use crate::traits::PartitionResults;
 use derive_more::From;
 use geo::Point;
 use itertools::Itertools;

@@ -32,6 +32,9 @@
         # rustup
         rust'
 
+        cargo-watch
+        cargo-tarpaulin
+
         openssl
 
         pkg-config
