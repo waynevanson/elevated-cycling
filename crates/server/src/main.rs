@@ -1,36 +1,92 @@
-// app
-// setup: read osm, get ways, get nodes, filter cyclable, get nodes, get lat/lon, save
+// use nix to package the docker file
+// use a nix command to run docjer compose with the image we want.
+#![feature(let_chains)]
 
+mod collect_tuples;
+mod elevation;
+mod futures_concurently;
+mod partition_results;
+
+use collect_tuples::CollectTuples;
+use elevation::{lookup_elevations, ElevationRequestBody};
+use futures_concurently::IntoJoinConcurrently;
 use geo::Point;
+use itertools::Itertools;
 use osmpbf::{Element, ElementReader, TagIter};
-use redis::{Client, Commands};
+use partition_results::PartitionResults;
+use redis::{Commands, Connection};
 use std::{
     collections::{HashMap, HashSet},
     io::Read,
 };
 
-fn main() {
-    let create_elements = || ElementReader::from_path("").unwrap();
-    let client = Client::open("redis://0.0.0.0:6358").unwrap();
-    let mut connection = client.get_connection().unwrap();
+#[tokio::main]
+async fn main() {
+    let redis_client = redis::Client::open("redis://127.0.0.1:6379").unwrap();
+    let mut redis_connection = redis_client.get_connection().unwrap();
 
-    let cyclable_node_ids = create_elements().par_map_collect(get_cyclable_node_ids_from_element);
+    let reqwest_client = reqwest::Client::new();
 
-    let points =
-        create_elements().par_map_collect(|element| get_nodes_from(element, &cyclable_node_ids));
+    let points = get_points();
+    let _elevations = get_elevation_by_node_id(&reqwest_client, &points).await;
 
+    add_points_to_redis(&mut redis_connection, points);
+}
+
+fn add_points_to_redis(connection: &mut Connection, points: HashMap<i64, Point<f64>>) {
     let members = points
-        .iter()
+        .into_iter()
         .map(|(node_id, point)| (point.x(), point.y(), node_id))
         .collect::<Vec<_>>();
 
-    connection.geo_add::<_, _, ()>("cyclable", members).unwrap();
-
-    // add redis dockerfile to start before this
-    // add this to docker image.
+    connection.geo_add::<_, _, ()>("osm", members).unwrap();
 }
 
-fn get_nodes_from(element: Element<'_>, node_ids: &HashSet<i64>) -> HashMap<i64, Point<f64>> {
+async fn get_elevation_by_node_id<'a>(
+    client: &reqwest::Client,
+    nodes: &HashMap<i64, Point<f64>>,
+) -> HashMap<i64, f64> {
+    nodes
+        .into_iter()
+        .chunks(1_000)
+        .into_iter()
+        .map(|chunk| chunk.collect_tuples::<Vec<_>, Vec<_>>())
+        .map(|(node_ids, points)| async {
+            lookup_elevations(&client, ElevationRequestBody::from_iter(points))
+                .await
+                .map(|elevations| {
+                    node_ids
+                        .into_iter()
+                        .zip_eq(elevations)
+                        .collect::<HashMap<i64, f64>>()
+                })
+        })
+        .join_concurrently::<Vec<_>>(4)
+        .await
+        .into_iter()
+        .partition_results::<Vec<_>, Vec<_>>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+// use redis for finding distances because cbf writing that logic again.
+fn get_points() -> HashMap<i64, Point> {
+    let create_elements = || ElementReader::from_path("./planet.osm.pbf").unwrap();
+
+    let cyclable_node_ids = create_elements().par_map_collect(get_cyclable_node_ids_from_element);
+
+    let points = create_elements()
+        .par_map_collect(|element| get_points_by_node_id(element, &cyclable_node_ids));
+
+    points
+}
+
+fn get_points_by_node_id(
+    element: Element<'_>,
+    node_ids: &HashSet<i64>,
+) -> HashMap<i64, Point<f64>> {
     match element {
         Element::Node(node) => Some((node.id(), (node.lat(), node.lon()))),
         Element::DenseNode(node) => Some((node.id(), (node.lat(), node.lon()))),
