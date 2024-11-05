@@ -1,7 +1,4 @@
-use crate::elevation::{lookup_elevations, ElevationRequestBody};
-use crate::traits::{
-    CollectTuples, IntoJoinConcurrently, IntoNodeIdPoint, ParMapCollect, PartitionResults,
-};
+use crate::traits::{IntoNodeIdPoint, ParMapCollect};
 use geo::{Distance, Haversine, Point};
 use itertools::Itertools;
 use osmpbf::{Element, ElementReader, TagIter};
@@ -13,6 +10,7 @@ pub struct Buffer {
     pub distances: UnGraphMap<i64, f64>,
 }
 
+/// Creates a buffer of values used for all requests.
 pub async fn create_buffer() -> Buffer {
     let create_elements = || ElementReader::from_path("./planet.osm.pbf").unwrap();
 
@@ -24,7 +22,6 @@ pub async fn create_buffer() -> Buffer {
 
     let distances = get_distances_from_nodes(nodes, &points);
 
-    // Now let's use gradients to figure out our sickest downhill circuit!
     Buffer { points, distances }
 }
 

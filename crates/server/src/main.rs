@@ -9,6 +9,7 @@ use elevation::{lookup_elevations, ElevationRequestBody};
 use geo::{Distance, Haversine, Point};
 use itertools::Itertools;
 use petgraph::prelude::DiGraphMap;
+use reqwest::header::ACCEPT_ENCODING;
 use std::collections::HashMap;
 use traits::{CollectTuples, IntoJoinConcurrently, PartitionResults};
 
@@ -53,6 +54,42 @@ async fn main() {
     // find paths to this point.
     // way up should be that with highest gradient.
     // way down should be that with lowest gradient.
+
+    let (closest_node_id, closest_point) = find_closest(&points, &origin);
+
+    let (highest_node_id, highest_point) = find_highest(&elevations);
+}
+
+fn find_highest<'a, 'b>(elevations: &'b HashMap<&'a i64, f64>) -> (&'a i64, &'b f64) {
+    elevations
+        .iter()
+        .map(|(&node_id, elevation)| (node_id, elevation))
+        .reduce(
+            |(left_node_id, left_elevation), (right_node_id, right_elevation)| {
+                if left_elevation > right_elevation {
+                    (left_node_id, left_elevation)
+                } else {
+                    (right_node_id, right_elevation)
+                }
+            },
+        )
+        .unwrap()
+}
+
+fn find_closest<'a>(points: &HashMap<&'a i64, &Point>, origin: &Point<f64>) -> (&'a i64, f64) {
+    points
+        .iter()
+        .map(|(&node_id, &point)| (node_id, Haversine::distance(*origin, *point)))
+        .reduce(
+            |(left_node_id, left_distance), (right_node_id, right_distance)| {
+                if left_distance < right_distance {
+                    (left_node_id, left_distance)
+                } else {
+                    (right_node_id, right_distance)
+                }
+            },
+        )
+        .unwrap()
 }
 
 /// I would love to be able to read directly from a file in rust but that's not
