@@ -20,8 +20,8 @@ async fn main() {
 
     // per request
     // todo - parameterise
-    let origin: Point<f64> = Point::from((0.0, 0.0));
-    let radius: f64 = 10_000.0;
+    let origin: Point<f64> = Point::from((-38.032603, 145.335817));
+    let radius: f64 = 5_000.0;
 
     // derivations
     let points: HashMap<&i64, &Point<f64>> = buffer
@@ -45,6 +45,14 @@ async fn main() {
         })
         .flat_map(|(left, right, gradient)| [(left, right, gradient), (right, left, -gradient)])
         .collect();
+
+    // now the path finding magic.
+
+    // combine gradients, keeping nodes at elevations and when gradients go between - and +.
+    // find highest elevation point
+    // find paths to this point.
+    // way up should be that with highest gradient.
+    // way down should be that with lowest gradient.
 }
 
 /// I would love to be able to read directly from a file in rust but that's not

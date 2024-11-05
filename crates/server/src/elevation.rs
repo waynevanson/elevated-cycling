@@ -82,10 +82,13 @@ impl TryFrom<ElevationResponse> for Vec<LocationAndElevation> {
     }
 }
 
-const ELEVATION_ENDPOINT: &str = "http://open-elevation:8080/api/v1/lookup";
+// Docker
+// const ELEVATION_ENDPOINT: &str = "http://open-elevation:8080/api/v1/lookup";
+
+// Local
+const ELEVATION_ENDPOINT: &str = "http://0.0.0.0:9000/api/v1/lookup";
 
 #[derive(Debug, Error)]
-
 pub enum ElevationsError {
     #[error("{0}")]
     ReqwestError(#[from] reqwest::Error),
