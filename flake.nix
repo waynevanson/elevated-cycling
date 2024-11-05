@@ -39,6 +39,8 @@
 
         pkg-config
 
+        gdal
+
         # Available only via fenix
         # Useful for integrating this version fo
         rust-analyzer-nightly
@@ -54,15 +56,19 @@
         BINGEN_EXTRA_CLANG_ARGS =
           (builtins.map (a: ''-I"${a}/include"'') [
             pkgs.glibc.dev
+            pkgs.gdal
           ])
           ++ [
             ''-I"${pkgs.llvmPackages_latest.libclang.lib}/lib/clang/${pkgs.llvmPackages_latest.libclang.version}/include"''
             ''-I"${pkgs.glib.dev}/include/glib-2.0"''
             ''-I${pkgs.glib.out}/lib/glib-2.0/include/''
           ];
-        PKG_CONFIG_PATH = 
+        PKG_CONFIG_PATH =
           lib.strings.concatStringsSep ":"
-          (builtins.map (a: ''${a}/lib/pkgconfig'') [pkgs.openssl.dev]);
+          (builtins.map (a: ''${a}/lib/pkgconfig'') [
+            pkgs.openssl.dev
+            pkgs.gdal
+          ]);
       };
       shellHook = ''
         export PATH=$PATH:''${CARGO_HOME:-~/.cargo}/bin

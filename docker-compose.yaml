@@ -3,7 +3,6 @@ services:
     restart: always
     depends_on:
       - open-elevation
-      - redis
     build:
       target: server
     volumes:
@@ -11,11 +10,6 @@ services:
       - backend-planet-osm-pbf:/data
     ports:
       - 3000:3000
-
-  redis:
-    image: redis:latest-alpine
-    ports:
-      - 6379:6379
 
   open-elevation:
     build:
