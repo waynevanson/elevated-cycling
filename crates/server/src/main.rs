@@ -2,135 +2,42 @@
 
 mod bootstrap_buffer;
 mod elevation;
+mod handler;
 mod traits;
 
+use axum::{routing::get, Router};
 use bootstrap_buffer::create_buffer;
-use elevation::{lookup_elevations, ElevationRequestBody};
-use geo::{Distance, Haversine, Point};
-use itertools::Itertools;
-use petgraph::prelude::DiGraphMap;
-use reqwest::header::ACCEPT_ENCODING;
-use std::collections::HashMap;
-use traits::{CollectTuples, IntoJoinConcurrently, PartitionResults};
+use handler::{handler, HandlerState};
+use liquid::ParserBuilder;
+use std::sync::Arc;
+use tokio::net::TcpListener;
+
+async fn create_state() -> HandlerState {
+    HandlerState {
+        buffer: Arc::new(create_buffer().await),
+        client: Arc::new(reqwest::Client::new()),
+        template: Arc::new(
+            ParserBuilder::with_stdlib()
+                .build()
+                .unwrap()
+                .parse_file("./crates/server/templates/index.liquid")
+                .unwrap(),
+        ),
+    }
+}
 
 #[tokio::main]
 async fn main() {
-    // per server
-    let buffer = create_buffer().await;
-    let client = reqwest::Client::new();
+    println!("Bootstrapping server...");
 
-    // per request
-    // todo - parameterise
-    let origin: Point<f64> = Point::from((-38.032603, 145.335817));
-    let radius: f64 = 5_000.0;
+    let state = create_state().await;
+    let app = Router::new()
+        .route("/:latitude/:longitude/:max_radius", get(handler))
+        .with_state(state);
 
-    // derivations
-    let points: HashMap<&i64, &Point<f64>> = buffer
-        .points
-        .iter()
-        .filter(|(_, point)| Haversine::distance(origin, **point) < radius)
-        .collect();
+    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
-    // buffering this API looks like it will take about 24 hours,
-    // better to call it when we need it.
-    let elevations = get_elevations_by_node_id(&client, &points).await;
+    println!("Listening on ${listener:?}");
 
-    let _gradients: DiGraphMap<i64, f64> = buffer
-        .distances
-        .all_edges()
-        .flat_map(|(from, to, distance)| {
-            let left = elevations.get(&from)?;
-            let right = elevations.get(&to)?;
-            let gradient = (left - right) / distance;
-            Some((from, to, gradient))
-        })
-        .flat_map(|(left, right, gradient)| [(left, right, gradient), (right, left, -gradient)])
-        .collect();
-
-    // now the path finding magic.
-
-    // combine gradients, keeping nodes at elevations and when gradients go between - and +.
-    // find highest elevation point
-    // find paths to this point.
-    // way up should be that with highest gradient.
-    // way down should be that with lowest gradient.
-
-    let (closest_node_id, closest_point) = find_closest(&points, &origin);
-
-    let (highest_node_id, highest_point) = find_highest(&elevations);
-}
-
-fn find_highest<'a, 'b>(elevations: &'b HashMap<&'a i64, f64>) -> (&'a i64, &'b f64) {
-    elevations
-        .iter()
-        .map(|(&node_id, elevation)| (node_id, elevation))
-        .reduce(
-            |(left_node_id, left_elevation), (right_node_id, right_elevation)| {
-                if left_elevation > right_elevation {
-                    (left_node_id, left_elevation)
-                } else {
-                    (right_node_id, right_elevation)
-                }
-            },
-        )
-        .unwrap()
-}
-
-fn find_closest<'a>(points: &HashMap<&'a i64, &Point>, origin: &Point<f64>) -> (&'a i64, f64) {
-    points
-        .iter()
-        .map(|(&node_id, &point)| (node_id, Haversine::distance(*origin, *point)))
-        .reduce(
-            |(left_node_id, left_distance), (right_node_id, right_distance)| {
-                if left_distance < right_distance {
-                    (left_node_id, left_distance)
-                } else {
-                    (right_node_id, right_distance)
-                }
-            },
-        )
-        .unwrap()
-}
-
-/// I would love to be able to read directly from a file in rust but that's not
-/// going to happen unless I put more time aside.
-async fn get_elevations_by_node_id<'a>(
-    client: &reqwest::Client,
-    nodes: &HashMap<&'a i64, &Point<f64>>,
-) -> HashMap<&'a i64, f64> {
-    let concurrency = 32;
-    let chunks = 100;
-    let total = nodes.len() / chunks;
-
-    nodes
-        .iter()
-        .map(|(node_id, value)| (*node_id, *value))
-        .chunks(chunks)
-        .into_iter()
-        .map(|chunk| chunk.collect_tuples::<Vec<_>, Vec<_>>())
-        .enumerate()
-        .map(|(index, (node_ids, points))| async move {
-            lookup_elevations(&client, ElevationRequestBody::from_iter(points))
-                .await
-                .map(|elevations| {
-                    node_ids
-                        .into_iter()
-                        .zip_eq(elevations)
-                        .collect::<HashMap<&i64, f64>>()
-                })
-                .map(|result| {
-                    let position = index + 1;
-                    println!("{position} of {total}");
-
-                    result
-                })
-        })
-        .join_concurrently::<Vec<_>>(concurrency)
-        .await
-        .into_iter()
-        .partition_results::<Vec<_>, Vec<_>>()
-        .unwrap()
-        .into_iter()
-        .flatten()
-        .collect()
+    axum::serve(listener, app).await.unwrap();
 }

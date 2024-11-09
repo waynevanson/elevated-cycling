@@ -1,0 +1,48 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>OpenStreetMap</title>
+
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/MapBBCode/mapbbcode@1.2.0/dist/lib/leaflet.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/MapBBCode/mapbbcode@1.2.0/dist/lib/leaflet.draw.css"
+    />
+    <script src="https://cdn.jsdelivr.net/gh/MapBBCode/mapbbcode@1.2.0/dist/lib/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/MapBBCode/mapbbcode@1.2.0/dist/lib/leaflet.draw.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/MapBBCode/mapbbcode@1.2.0/dist/mapbbcode.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/MapBBCode/mapbbcode@1.2.0/src/layers/LayerList.js"></script>
+
+    <script language="javascript" type="text/javascript">
+      var mapBBcode = new MapBBCode({
+        // windowPath: "public/mapbbcode/",
+        layers: "OpenStreetMap",
+        defaultZoom: 2,
+        defaultPosition: [22, 11],
+        viewWidth: 600,
+        viewHeight: 300,
+        fullViewHeight: 600,
+        editorHeight: 400,
+        windowWidth: 800,
+        windowHeight: 500,
+        fullFromStart: false,
+        preferStandardLayerSwitcher: true,
+      })
+    </script>
+  </head>
+  <body>
+    <div id="map-root">
+      {{ mapbbcode }}
+    </div>
+    <script language="javascript" type="text/javascript">
+      // TODO - Display message when there is no bbcode bb.
+      const map = document.querySelector("#map-root")
+      if (mapBBcode) mapBBcode.show("map-root")
+    </script>
+  </body>
+</html>

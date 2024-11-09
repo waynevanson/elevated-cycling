@@ -5,6 +5,7 @@ use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::prelude::UnGraphMap;
 use std::{collections::HashMap, io::Read};
 
+#[derive(Debug, Clone)]
 pub struct Buffer {
     pub points: HashMap<i64, Point<f64>>,
     pub distances: UnGraphMap<i64, f64>,
