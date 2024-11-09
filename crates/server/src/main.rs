@@ -32,12 +32,12 @@ async fn main() {
 
     let state = create_state().await;
     let app = Router::new()
-        .route("/:latitude/:longitude/:max_radius", get(handler))
+        .route("/:latitude/:longitude/:radius", get(handler))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
-    println!("Listening on ${listener:?}");
+    println!("Listening on ${:?}", listener.local_addr());
 
     axum::serve(listener, app).await.unwrap();
 }

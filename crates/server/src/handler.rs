@@ -44,6 +44,7 @@ pub async fn handler(
     State(state): State<HandlerState>,
     Path(params): Path<HandlerPathParams>,
 ) -> HandlerResponse {
+    println!("{params:?}");
     // per server
 
     // per request
@@ -98,8 +99,27 @@ pub async fn handler(
     .unwrap();
     println!("way down {:?}", travelling_to_path);
 
+    let mapbbcode = travelling_to_path
+        .into_iter()
+        .filter_map(|node_id| points.get(&node_id))
+        .map(|point| {
+            [
+                point.x().to_string(),
+                ",".to_string(),
+                point.y().to_string(),
+            ]
+            .into_iter()
+            .collect::<String>()
+        })
+        .intersperse(" ".to_string())
+        .collect::<String>();
+
+    let mapbbcode = ["[map]", &mapbbcode, "[/map]"]
+        .into_iter()
+        .collect::<String>();
+
     let globals = liquid::object!({
-        "mapbbcode": travelling_to_path
+        "mapbbcode": mapbbcode
     });
 
     let html = state.template.render(&globals).unwrap();

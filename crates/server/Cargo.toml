@@ -8,9 +8,7 @@ axum = { version = "0.7.7", features = ["macros", "query"] }
 derive_more = { version = "1.0.0", features = ["full"] }
 distance = "0.4.0"
 futures = "0.3.31"
-gdal = "0.17.1"
 geo = "0.29.1"
-geotiff = "0.0.2"
 itertools = "0.13.0"
 len-trait = "0.6.1"
 liquid = "0.26.9"
@@ -18,7 +16,6 @@ num-traits = "0.2.19"
 osmpbf = "0.3.4"
 petgraph = { version = "0.6.5", features = ["rayon"] }
 rayon = "1.10.0"
-redis = "0.27.5"
 reqwest = { version = "0.12.9", features = ["json"] }
 serde = { version = "1.0.214", features = ["derive"] }
 thiserror = "1.0.67"
