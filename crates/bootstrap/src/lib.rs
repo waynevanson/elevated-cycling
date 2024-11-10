@@ -3,10 +3,11 @@ mod elevation;
 mod file_cache;
 
 use elevation::{lookup_elevations, ElevationRequestBody};
+use geo::{Distance, Haversine};
 use itertools::Itertools;
-use log::{info, trace};
+use log::info;
 use osmpbf::{Element, ElementReader, TagIter};
-use petgraph::prelude::UnGraphMap;
+use petgraph::prelude::{DiGraphMap, UnGraphMap};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -18,6 +19,7 @@ pub type NodeId = i64;
 pub type Elevation = f64;
 pub type Point = geo::Point<f64>;
 
+// These types are what we store in the files
 pub type Points = HashMap<NodeId, Point>;
 pub type Elevations = HashMap<NodeId, f64>;
 pub type Edges = Vec<(NodeId, NodeId)>;
@@ -75,8 +77,13 @@ fn create_points(graph: &UnGraphMap<NodeId, ()>) -> Points {
     }
 }
 
+pub struct EdgeWeight {
+    pub distance: f64,
+    pub gradient: f64,
+}
+
 // The pattern is "Read from file and if it doesn't exist then make it exist"
-pub async fn get() {
+pub async fn get() -> (HashMap<i64, (geo::Point, f64)>, DiGraphMap<i64, EdgeWeight>) {
     let client = reqwest::Client::new();
 
     create_dir_all("data").unwrap();
@@ -84,10 +91,51 @@ pub async fn get() {
     // Read from files, otherwise create them.
     info!("Creating graph");
     let graph = create_graph();
+
     info!("Creating points");
     let points = create_points(&graph);
+
     info!("Creating elevations");
     let elevations = create_elevations(&client, &points).await;
+
+    info!("Combine elevations and points");
+    let nodes = points
+        .iter()
+        .map(|(node_id, point)| (*node_id, (*point, *elevations.get(node_id).unwrap())))
+        .collect::<HashMap<_, _>>();
+
+    info!("Create graph with weighted edges");
+    let graph: DiGraphMap<_, _> = graph
+        .all_edges()
+        .flat_map(|(left_node_id, right_node_id, _)| {
+            let left_point = points.get(&left_node_id).unwrap();
+            let right_point = points.get(&right_node_id).unwrap();
+            let distance_diff = Haversine::distance(*left_point, *right_point);
+
+            let left_elevation = elevations.get(&left_node_id).unwrap();
+            let right_elevation = elevations.get(&right_node_id).unwrap();
+            let elevation_diff = left_elevation - right_elevation;
+
+            let gradient = elevation_diff / distance_diff;
+
+            let edge_left = EdgeWeight {
+                distance: distance_diff,
+                gradient,
+            };
+
+            let edge_right = EdgeWeight {
+                distance: distance_diff,
+                gradient: -gradient,
+            };
+
+            [
+                (left_node_id, right_node_id, edge_left),
+                (right_node_id, left_node_id, edge_right),
+            ]
+        })
+        .collect();
+
+    (nodes, graph)
 }
 
 // We need to write incrementally to the file as it receives data from the API,
@@ -111,8 +159,8 @@ async fn create_elevations(client: &reqwest::Client, nodes: &HashMap<i64, Point>
         Elevations::default()
     };
 
-    let total = nodes.len() - elevations_existing.len();
-    info!("{total} total elevations");
+    let total = (nodes.len() - elevations_existing.len()) / CHUNKS;
+    info!("{total} chunks remaining");
 
     // Write to one file as each future completes.
     let writer = Arc::new(Mutex::new(File::create(ELEVATIONS_FILE).unwrap()));

@@ -1,5 +1,3 @@
-use crate::bootstrap_buffer::Buffer;
-use crate::elevation::{lookup_elevations, ElevationRequestBody};
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse};
 use geo::{Distance, Haversine, Point};
