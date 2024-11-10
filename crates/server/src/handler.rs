@@ -11,7 +11,7 @@ use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use traits::{Average, CollectTuples, IntoJoinConcurrently, PartitionResults};
+use traits::{Average, CollectTuples};
 
 #[derive(Debug, Deserialize)]
 pub struct HandlerPathParams {
@@ -22,7 +22,6 @@ pub struct HandlerPathParams {
 
 #[derive(Clone)]
 pub struct HandlerState {
-    pub buffer: Arc<Buffer>,
     pub client: Arc<Client>,
     pub template: Arc<Template>,
 }

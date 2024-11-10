@@ -1,11 +1,6 @@
 mod handler;
 
-use axum::{
-    response::{Html, IntoResponse},
-    routing::get,
-    Router,
-};
-use bootstrap_buffer::create_buffer;
+use axum::{response::Html, routing::get, Router};
 use handler::{handler, HandlerState};
 use liquid::ParserBuilder;
 use std::sync::Arc;
@@ -15,7 +10,6 @@ async fn create_state() -> HandlerState {
     let contents = include_str!("../templates/index.liquid");
 
     HandlerState {
-        buffer: Arc::new(create_buffer().await),
         client: Arc::new(reqwest::Client::new()),
         template: Arc::new(
             ParserBuilder::with_stdlib()
