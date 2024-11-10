@@ -1,7 +1,7 @@
 #![feature(iter_collect_into)]
 mod elevation;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use elevation::{lookup_elevations, ElevationRequestBody};
 use geo::{Distance, Haversine};
 use itertools::Itertools;
@@ -9,7 +9,8 @@ use log::info;
 use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::prelude::{DiGraphMap, UnGraphMap};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::hash::Hash;
+use std::io::{BufReader, Read, Write};
 use std::sync::Arc;
 use std::{collections::HashMap, fs::create_dir_all};
 use tokio::sync::Mutex;
@@ -29,52 +30,56 @@ const POINTS_FILE: &str = "data/points.postcard";
 const EDGES_FILE: &str = "data/edges.postcard";
 const ELEVATIONS_FILE: &str = "data/elevations.json";
 
-fn create_elements() -> ElementReader<std::io::BufReader<std::fs::File>> {
-    ElementReader::from_path(OSM_INPUT_FILE).unwrap()
+fn create_elements() -> Result<ElementReader<BufReader<File>>> {
+    Ok(ElementReader::from_path(OSM_INPUT_FILE)?)
 }
 
-fn read_postcard_data<T: serde::de::DeserializeOwned>(path: &str) -> std::io::Result<T> {
+fn read_postcard_data<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
-    let data: T = postcard::from_bytes(&buffer).unwrap();
+    let data: T = postcard::from_bytes(&buffer)?;
     Ok(data)
 }
 
-fn create_graph() -> UnGraphMap<i64, ()> {
-    if fs::exists(EDGES_FILE).unwrap() {
+fn create_graph() -> Result<UnGraphMap<i64, ()>> {
+    let value = if fs::exists(EDGES_FILE)? {
         info!("{EDGES_FILE} exists, reading");
-        let edges = read_postcard_data::<Edges>(EDGES_FILE).unwrap();
+        let edges = read_postcard_data::<Edges>(EDGES_FILE)?;
         edges
             .into_iter()
             .map(|(left, right)| (left, right, ()))
             .collect()
     } else {
         info!("{EDGES_FILE} does not exist, creating");
-        let graph = get_unweighted_cyclable_graphmap_from_elements(create_elements());
+        let graph = get_unweighted_cyclable_graphmap_from_elements(create_elements()?);
         let edges = graph
             .all_edges()
             .map(|(left, right, _)| (left, right))
             .collect_vec();
-        let contents = postcard::to_stdvec(&edges).unwrap();
-        fs::write(EDGES_FILE, contents.as_slice()).unwrap();
+        let contents = postcard::to_stdvec(&edges)?;
+        fs::write(EDGES_FILE, contents.as_slice())?;
         graph
-    }
+    };
+
+    Ok(value)
 }
 
-fn create_points(graph: &UnGraphMap<NodeId, ()>) -> Points {
-    if fs::exists(POINTS_FILE).unwrap() {
+fn create_points(graph: &UnGraphMap<NodeId, ()>) -> Result<Points> {
+    let value = if fs::exists(POINTS_FILE)? {
         info!("{POINTS_FILE} exists, reading");
-        read_postcard_data::<Points>(POINTS_FILE).unwrap()
+        read_postcard_data::<Points>(POINTS_FILE)?
     } else {
         info!("{POINTS_FILE} does not exist, creating");
-        let points = create_elements().par_map_collect(|element| {
+        let points = create_elements()?.par_map_collect(|element| {
             get_points_by_node_id(element, |node_id| graph.contains_node(*node_id))
         });
-        let contents = postcard::to_stdvec(&points).unwrap();
-        fs::write(POINTS_FILE, contents.as_slice()).unwrap();
+        let contents = postcard::to_stdvec(&points)?;
+        fs::write(POINTS_FILE, contents.as_slice())?;
         points
-    }
+    };
+
+    Ok(value)
 }
 
 pub struct EdgeWeight {
@@ -83,26 +88,32 @@ pub struct EdgeWeight {
 }
 
 // The pattern is "Read from file and if it doesn't exist then make it exist"
-pub async fn get() -> (HashMap<i64, (geo::Point, f64)>, DiGraphMap<i64, EdgeWeight>) {
+pub async fn get() -> Result<(HashMap<i64, (geo::Point, f64)>, DiGraphMap<i64, EdgeWeight>)> {
     let client = reqwest::Client::new();
 
-    create_dir_all("data").unwrap();
+    create_dir_all("data")?;
 
     // Read from files, otherwise create them.
     info!("Creating graph");
-    let graph = create_graph();
+    let graph = create_graph()?;
 
     info!("Creating points");
-    let points = create_points(&graph);
+    let points = create_points(&graph)?;
 
     info!("Creating elevations");
-    let elevations = create_elevations(&client, &points).await.unwrap();
+    let elevations = create_elevations(&client, &points).await?;
 
     info!("Combine elevations and points");
     let nodes = points
         .iter()
-        .map(|(node_id, point)| (*node_id, (*point, *elevations.get(node_id).unwrap())))
-        .collect::<HashMap<_, _>>();
+        .map(|(node_id, point)| {
+            let elevation = *elevations
+                .get(node_id)
+                .ok_or_else(|| anyhow!("Expected to find this here but didn't"))?;
+
+            Ok((*node_id, (*point, elevation)))
+        })
+        .collect::<Result<HashMap<_, _>>>()?;
 
     info!("Create graph with weighted edges");
     let graph: DiGraphMap<_, _> = graph
@@ -135,7 +146,7 @@ pub async fn get() -> (HashMap<i64, (geo::Point, f64)>, DiGraphMap<i64, EdgeWeig
         })
         .collect();
 
-    (nodes, graph)
+    Ok((nodes, graph))
 }
 
 fn get_elevations() -> Result<HashMap<i64, f64>> {
@@ -167,8 +178,8 @@ async fn create_elevations(
     client: &reqwest::Client,
     nodes: &HashMap<i64, Point>,
 ) -> Result<Elevations> {
-    const CONCURRENCY: usize = 16;
-    const CHUNKS: usize = 1_000;
+    const CONCURRENCY: usize = 64;
+    const CHUNKS: usize = 100;
 
     let mut elevations_existing = get_elevations()?;
 
@@ -188,25 +199,25 @@ async fn create_elevations(
         .enumerate()
         .map(|(index, (node_ids, points))| {
             let writer = writer.clone();
+            let count = index + 1;
 
             async move {
-                info!("elevations: chunk {} of {}: fetching", index + 1, total);
-                let response = lookup_elevations(&client, ElevationRequestBody::from_iter(points))
-                    .await
-                    .unwrap();
+                info!("elevations: chunk {} of {}: fetching", count, total);
+                let response =
+                    lookup_elevations(&client, ElevationRequestBody::from_iter(points)).await?;
                 let elevations = node_ids
                     .into_iter()
                     .zip_eq(response)
                     .collect::<Elevations>();
-                let contents = serde_json::to_vec(&elevations).unwrap();
+                let contents = serde_json::to_vec(&elevations)?;
 
-                writer.lock().await.write_all(&contents.as_slice()).unwrap();
-                info!("elevations: chunk {} of {}: complete", index + 1, total);
-                elevations
+                writer.lock().await.write_all(&contents.as_slice())?;
+                info!("elevations: chunk {} of {}: complete", count, total);
+                Result::<HashMap<NodeId, Elevation>>::Ok(elevations)
             }
         })
-        .join_concurrently::<Vec<_>>(CONCURRENCY)
-        .await
+        .join_concurrently_result::<Vec<_>, _>(CONCURRENCY)
+        .await?
         .into_iter()
         .flatten()
         .collect_into(&mut elevations_existing);

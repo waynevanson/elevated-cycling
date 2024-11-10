@@ -1,13 +1,16 @@
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::Future;
 
-pub trait IntoJoinConcurrently {
-    async fn join_concurrently<Collection>(mut self, max_concurrency: usize) -> Collection
+pub trait IntoJoinConcurrently<T>
+where
+    Self: Iterator + Sized,
+    T: Send + Sync,
+{
+    async fn join_concurrently_result<C, E>(mut self, max_concurrency: usize) -> Result<C, E>
     where
-        Self: Iterator + Sized,
-        Self::Item: Future,
-        <Self::Item as Future>::Output: Send + Sync,
-        Collection: Default + Extend<<Self::Item as Future>::Output>,
+        Self::Item: Future<Output = Result<T, E>>,
+        E: Send + Sync,
+        C: Default + Extend<T>,
     {
         if max_concurrency <= 0 {
             panic!(
@@ -24,10 +27,13 @@ pub trait IntoJoinConcurrently {
             futures_unordered.push(fut);
         }
 
-        let mut collection = Collection::default();
+        let mut collection = C::default();
 
         while let Some(result) = futures_unordered.next().await {
-            collection.extend(Some(result));
+            match result {
+                Ok(value) => collection.extend(Some(value)),
+                Err(error) => return Err(error),
+            };
 
             while futures_unordered.len() < max_concurrency
                 && let Some(fut) = self.next()
@@ -36,8 +42,13 @@ pub trait IntoJoinConcurrently {
             }
         }
 
-        collection
+        Ok(collection)
     }
 }
 
-impl<T> IntoJoinConcurrently for T where T: Iterator + Sized {}
+impl<I, T> IntoJoinConcurrently<T> for I
+where
+    I: Iterator + Sized,
+    T: Send + Sync,
+{
+}
