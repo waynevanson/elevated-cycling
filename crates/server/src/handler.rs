@@ -1,6 +1,5 @@
 use crate::bootstrap_buffer::Buffer;
 use crate::elevation::{lookup_elevations, ElevationRequestBody};
-use crate::traits::{Average, CollectTuples, IntoJoinConcurrently, PartitionResults};
 use axum::extract::{Path, State};
 use axum::response::{Html, IntoResponse};
 use geo::{Distance, Haversine, Point};
@@ -14,6 +13,7 @@ use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use traits::{Average, CollectTuples, IntoJoinConcurrently, PartitionResults};
 
 #[derive(Debug, Deserialize)]
 pub struct HandlerPathParams {
@@ -28,8 +28,6 @@ pub struct HandlerState {
     pub client: Arc<Client>,
     pub template: Arc<Template>,
 }
-
-struct MapBBCode {}
 
 pub struct HandlerResponse(Html<String>);
 

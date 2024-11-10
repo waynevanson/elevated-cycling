@@ -1,11 +1,12 @@
-#![feature(let_chains)]
-
 mod bootstrap_buffer;
 mod elevation;
 mod handler;
-mod traits;
 
-use axum::{routing::get, Router};
+use axum::{
+    response::{Html, IntoResponse},
+    routing::get,
+    Router,
+};
 use bootstrap_buffer::create_buffer;
 use handler::{handler, HandlerState};
 use liquid::ParserBuilder;
@@ -13,6 +14,8 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 async fn create_state() -> HandlerState {
+    let contents = include_str!("../templates/index.liquid");
+
     HandlerState {
         buffer: Arc::new(create_buffer().await),
         client: Arc::new(reqwest::Client::new()),
@@ -20,7 +23,7 @@ async fn create_state() -> HandlerState {
             ParserBuilder::with_stdlib()
                 .build()
                 .unwrap()
-                .parse_file("./crates/server/templates/index.liquid")
+                .parse(&contents)
                 .unwrap(),
         ),
     }
@@ -29,11 +32,13 @@ async fn create_state() -> HandlerState {
 #[tokio::main]
 async fn main() {
     println!("Bootstrapping server...");
+    let contents = include_str!("../../../public/index.html");
 
     let state = create_state().await;
     let app = Router::new()
         .route("/:latitude/:longitude/:radius", get(handler))
-        .with_state(state);
+        .with_state(state)
+        .route("/", get(Html(contents)));
 
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
 

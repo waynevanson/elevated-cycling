@@ -1,10 +1,10 @@
-use crate::traits::PartitionResults;
 use derive_more::From;
 use geo::Point;
 use itertools::Itertools;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use traits::PartitionResults;
 
 #[derive(Debug, Serialize, From)]
 pub struct ElevationLocation {

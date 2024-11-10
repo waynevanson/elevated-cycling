@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 mod average;
 mod collect_tuples;
 mod futures_concurently;

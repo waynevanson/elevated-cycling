@@ -3,3 +3,4 @@ dist/
 target/
 planet.osm.pbf
 .direnv/
+/data

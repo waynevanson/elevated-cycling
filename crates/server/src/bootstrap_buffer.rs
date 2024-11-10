@@ -1,9 +1,9 @@
-use crate::traits::{IntoNodeIdPoint, ParMapCollect};
 use geo::{Distance, Haversine, Point};
 use itertools::Itertools;
 use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::prelude::UnGraphMap;
 use std::{collections::HashMap, io::Read};
+use traits::{IntoNodeIdPoint, ParMapCollect};
 
 #[derive(Debug, Clone)]
 pub struct Buffer {

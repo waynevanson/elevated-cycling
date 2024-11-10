@@ -1,0 +1,32 @@
+[package]
+name = "bootstrap"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "booty"
+path = "src/main.rs"
+
+
+[dependencies]
+clap = "4.5.20"
+derive_more = { version = "1.0.0", features = ["full"] }
+distance = "0.4.0"
+env_logger = "0.11.5"
+geo = { version = "0.29.1", features = ["use-serde"] }
+itertools = "0.13.0"
+log = "0.4.22"
+osmpbf = "0.3.4"
+petgraph = { version = "0.6.5", features = [
+    "serde",
+    "serde-1",
+    "serde_derive",
+] }
+postcard = { version = "1.0.10", features = ["use-std"] }
+rayon = "1.10.0"
+reqwest = "0.12.9"
+serde = { version = "1.0.214", features = ["derive"] }
+serde_json = "1.0.132"
+thiserror = "2.0.1"
+tokio = { version = "1.41.1", features = ["full"] }
+traits = { path = "../traits" }
