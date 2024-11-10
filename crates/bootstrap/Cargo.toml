@@ -7,6 +7,10 @@ edition = "2021"
 name = "booty"
 path = "src/main.rs"
 
+[[bin]]
+name = "convert"
+path = "src/json_to_postcard.rs"
+
 
 [dependencies]
 anyhow = "1.0.93"
