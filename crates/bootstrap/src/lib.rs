@@ -1,7 +1,7 @@
 #![feature(iter_collect_into)]
 mod elevation;
-mod file_cache;
 
+use anyhow::Result;
 use elevation::{lookup_elevations, ElevationRequestBody};
 use geo::{Distance, Haversine};
 use itertools::Itertools;
@@ -96,7 +96,7 @@ pub async fn get() -> (HashMap<i64, (geo::Point, f64)>, DiGraphMap<i64, EdgeWeig
     let points = create_points(&graph);
 
     info!("Creating elevations");
-    let elevations = create_elevations(&client, &points).await;
+    let elevations = create_elevations(&client, &points).await.unwrap();
 
     info!("Combine elevations and points");
     let nodes = points
@@ -138,26 +138,39 @@ pub async fn get() -> (HashMap<i64, (geo::Point, f64)>, DiGraphMap<i64, EdgeWeig
     (nodes, graph)
 }
 
-// We need to write incrementally to the file as it receives data from the API,
-// Because with a huge dataset in memory, the responses from the API are very very slow.
-//
-// Using JSON because it's easily to read & write stream as separated values.
-// Will consider postcard COBS flavour but not yet.
-async fn create_elevations(client: &reqwest::Client, nodes: &HashMap<i64, Point>) -> Elevations {
-    const CONCURRENCY: usize = 16;
-    const CHUNKS: usize = 1_000;
-
-    let mut elevations_existing = if fs::exists(ELEVATIONS_FILE).unwrap() {
+fn get_elevations() -> Result<HashMap<i64, f64>> {
+    let value = if fs::exists(ELEVATIONS_FILE).unwrap() {
         info!("{ELEVATIONS_FILE} exists, reading");
-        let contents = fs::read_to_string(ELEVATIONS_FILE).unwrap();
+
+        let contents = fs::read_to_string(ELEVATIONS_FILE)?;
+
         serde_json::Deserializer::from_str(&contents)
             .into_iter::<Elevations>()
             .flat_map(|elevations| elevations.unwrap().into_iter())
             .collect::<Elevations>()
     } else {
         info!("{ELEVATIONS_FILE} does not exist, setting empty elevations");
+
         Elevations::default()
     };
+
+    Ok(value)
+}
+
+// We need to write incrementally to the file as it receives data from the API,
+// Because with a huge dataset in memory, the responses from the API are very very slow.
+//
+// Using JSON because it's easily to read & write stream as separated values.
+// Will consider postcard COBS flavour but not yet.
+// TODO: Handle all errors
+async fn create_elevations(
+    client: &reqwest::Client,
+    nodes: &HashMap<i64, Point>,
+) -> Result<Elevations> {
+    const CONCURRENCY: usize = 16;
+    const CHUNKS: usize = 1_000;
+
+    let mut elevations_existing = get_elevations()?;
 
     let total = (nodes.len() - elevations_existing.len()) / CHUNKS;
     info!("{total} chunks remaining");
@@ -177,6 +190,7 @@ async fn create_elevations(client: &reqwest::Client, nodes: &HashMap<i64, Point>
             let writer = writer.clone();
 
             async move {
+                info!("elevations: chunk {} of {}: fetching", index + 1, total);
                 let response = lookup_elevations(&client, ElevationRequestBody::from_iter(points))
                     .await
                     .unwrap();
@@ -185,7 +199,7 @@ async fn create_elevations(client: &reqwest::Client, nodes: &HashMap<i64, Point>
                     .zip_eq(response)
                     .collect::<Elevations>();
                 let contents = serde_json::to_vec(&elevations).unwrap();
-                info!("elevations: chunk {} of {}: fetching", index + 1, total);
+
                 writer.lock().await.write_all(&contents.as_slice()).unwrap();
                 info!("elevations: chunk {} of {}: complete", index + 1, total);
                 elevations
@@ -197,7 +211,7 @@ async fn create_elevations(client: &reqwest::Client, nodes: &HashMap<i64, Point>
         .flatten()
         .collect_into(&mut elevations_existing);
 
-    elevations_existing
+    Ok(elevations_existing)
 }
 
 /// Creates a `HashMap` of points where `node_id`'s

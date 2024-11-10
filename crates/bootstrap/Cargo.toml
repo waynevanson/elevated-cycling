@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 
 [dependencies]
+anyhow = "1.0.93"
 clap = "4.5.20"
 derive_more = { version = "1.0.0", features = ["full"] }
 distance = "0.4.0"
