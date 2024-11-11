@@ -2,6 +2,14 @@
 
 You provide a coordinate and a radius to search, and receive the sickest down hill circuit of your life.
 
+# Crates
+
+| Name        | Description                                                                          |
+| :---------- | :----------------------------------------------------------------------------------- |
+| `bootstrap` | Gets all the data we can buffered into memory, calling API's and saving to postgres. |
+| `server`    | Contains and API to be consumed and webpages.                                        |
+| `traits`    | Utility traits useful for this repository.                                           |
+
 # Usage
 
 Work in progress, this doesn't work very well.

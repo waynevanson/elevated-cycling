@@ -29,57 +29,67 @@
         clang
         # Replace llvmPackages with llvmPackages_X, where X is the latest LLVM version (at the time of writing, 16)
         llvmPackages.bintools
-        # rustup
-        rust'
 
+        rust'
+        rust-analyzer-nightly
         cargo-watch
         cargo-tarpaulin
 
         openssl
-
+        openssl.dev
         pkg-config
-
-        gdal
-
-        # Available only via fenix
-        # Useful for integrating this version fo
-        rust-analyzer-nightly
       ];
-      buildInputs = [];
-      allInputs = nativeBuildInputs ++ buildInputs;
+      buildInputs = with pkgs; [
+        openssl
+        openssl.dev
+        pkg-config
+      ];
+      createPkgConfigPath = deps: pkgs.lib.strings.concatStringsSep ":" (builtins.map (a: "${a}/lib/pkgconfig") deps);
+      createBindgenExtraClangArgs = deps: (builtins.map (a: ''-I"${a}/include"'') deps);
+      createRustFlags = deps: builtins.map (a: ''-L ${a}/lib'') deps;
       env = with pkgs; {
         LIBCLANG_PATH = lib.makeLibraryPath [
           llvmPackages_latest.libclang.lib
         ];
-        RUSTFLAGS = builtins.map (a: ''-L ${a}/lib'') [];
-        LD_LIBRARY_PATH = lib.makeLibraryPath allInputs;
+        RUSTFLAGS = createRustFlags [];
+        LD_LIBRARY_PATH = lib.makeLibraryPath (nativeBuildInputs ++ buildInputs);
         BINGEN_EXTRA_CLANG_ARGS =
-          (builtins.map (a: ''-I"${a}/include"'') [
-            pkgs.glibc.dev
-            pkgs.gdal
-          ])
+          createBindgenExtraClangArgs (with pkgs; [ glibc.dev ])
           ++ [
             ''-I"${pkgs.llvmPackages_latest.libclang.lib}/lib/clang/${pkgs.llvmPackages_latest.libclang.version}/include"''
             ''-I"${pkgs.glib.dev}/include/glib-2.0"''
             ''-I${pkgs.glib.out}/lib/glib-2.0/include/''
           ];
-        PKG_CONFIG_PATH =
-          lib.strings.concatStringsSep ":"
-          (builtins.map (a: ''${a}/lib/pkgconfig'') [
-            pkgs.openssl.dev
-            pkgs.gdal
-          ]);
+        PKG_CONFIG_PATH = createPkgConfigPath (with pkgs; [openssl openssl.dev pkg-config ]);
       };
       shellHook = ''
         export PATH=$PATH:''${CARGO_HOME:-~/.cargo}/bin
         export PATH=$PATH:''${RUSTUP_HOME:-~/.rustup}/toolchains/$RUSTC_VERSION-x86_64-unknown-linux-gnu/bin/
       '';
-    in {
-      packages.default = fenix.packages.${system}.minimal.toolchain;
-
-      devShells.default = pkgs.mkShell ({
+      main = pkgs.rustPlatform.buildRustPackage (env
+        // {
           inherit nativeBuildInputs buildInputs shellHook;
-        }
-        // env);
+          pname = "bootay";
+          version = "0.0.0";
+          src = ./.;
+          cargoBuildOptions = [
+            "--bin"
+            "booty"
+          ];
+          cargoHash = "sha256-RNkuRHTmNIBx00VWMgYCG1QFpqv+dBUAjU2xWPLkW6g=";
+        });
+    in {
+      packages.default = main;
+      apps.default = env // {
+        inherit nativeBuildInputs buildInputs shellHook;
+        type = "app";
+        program = "${main}/bin/booty";
+        RUST_LOG = "info";
+      };
+
+      devShells.default = pkgs.mkShell (env
+        // {
+          inherit nativeBuildInputs buildInputs shellHook;
+        });
     });
 }

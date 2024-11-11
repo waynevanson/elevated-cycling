@@ -1,5 +1,6 @@
 #![feature(iter_collect_into)]
 mod elevation;
+mod sql;
 
 use anyhow::{anyhow, Result};
 use elevation::{lookup_elevations, ElevationRequestBody};
@@ -10,7 +11,7 @@ use osmpbf::{Element, ElementReader, TagIter};
 use petgraph::prelude::{DiGraphMap, UnGraphMap};
 use std::fs::{self, File};
 use std::hash::Hash;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::Arc;
 use std::{collections::HashMap, fs::create_dir_all};
 use tokio::sync::Mutex;
@@ -153,9 +154,9 @@ fn get_elevations() -> Result<HashMap<i64, f64>> {
     let value = if fs::exists(ELEVATIONS_FILE).unwrap() {
         info!("{ELEVATIONS_FILE} exists, reading");
 
-        let contents = fs::read_to_string(ELEVATIONS_FILE)?;
+        let contents = BufReader::new(File::open(ELEVATIONS_FILE)?);
 
-        serde_json::Deserializer::from_str(&contents)
+        serde_json::Deserializer::from_reader(contents)
             .into_iter::<Elevations>()
             .flat_map(|elevations| elevations.unwrap().into_iter())
             .collect::<Elevations>()
@@ -174,6 +175,7 @@ fn get_elevations() -> Result<HashMap<i64, f64>> {
 // Using JSON because it's easily to read & write stream as separated values.
 // Will consider postcard COBS flavour but not yet.
 // TODO: Handle all errors
+// TODO: this isn't reading all the elements from a file...
 async fn create_elevations(
     client: &reqwest::Client,
     nodes: &HashMap<i64, Point>,
@@ -183,7 +185,16 @@ async fn create_elevations(
 
     let mut elevations_existing = get_elevations()?;
 
-    let total = (nodes.len() - elevations_existing.len()) / CHUNKS;
+    let total_nodes = nodes.len() - elevations_existing.len();
+
+    info!(
+        "nodes: {}, existing: {}, remaining: {}",
+        nodes.len(),
+        elevations_existing.len(),
+        total_nodes
+    );
+
+    let total = total_nodes / CHUNKS;
     info!("{total} chunks remaining");
 
     // Write to one file as each future completes.
