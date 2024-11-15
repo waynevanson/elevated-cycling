@@ -3,8 +3,7 @@ services:
     restart: always
     depends_on:
       - open-elevation
-    build:
-      target: server
+    image: elevated-cycling:latest
     volumes:
       - ./:/app
       - backend-planet-osm-pbf:/data

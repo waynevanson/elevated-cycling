@@ -39,6 +39,7 @@
 
           codebase' = naersk'.buildPackage {
             src = ./.;
+            cargoClippyOptions = _: ["-A clippy::all"];
           };
 
           nativeBuildInputs = [
@@ -56,6 +57,8 @@
           buildInputs = [
             openssl
             pkg-config
+            docker
+            docker-compose
           ];
 
           environment = {
@@ -79,27 +82,33 @@
             export PATH=$PATH:''${RUSTUP_HOME:-~/.rustup}/toolchains/$RUSTC_VERSION-x86_64-unknown-linux-gnu/bin/
           '';
           common = environment // {inherit nativeBuildInputs buildInputs shellHook;};
-          bootstrap = naersk'.buildPackage (common
-            // {
-              name = "booty";
+
+          elevated-cycling = {
+            cli = naersk'.buildPackage {
+              name = "elevated-cycling-cli";
               version = "0.0.0";
               src = ./.;
-              cargoBuildOptions = options:
-                options
-                ++ [
-                  "--bin"
-                  "booty"
-                ];
-            });
-        in {
-          apps.default =
-            common
-            // {
-              type = "app";
-              program = "${bootstrap}/bin/booty";
-              RUST_LOG = "info";
+              cargoBuildArgs = args: args ++ ["--bin elevated-cycling"];
             };
+          };
 
+          main = pkgs.dockerTools.buildImage {
+            name = "elevated-cycling";
+            tag = "latest";
+
+            contents = [elevated-cycling.cli];
+
+            config = {
+              Cmd = ["RUST_LOG=info" "/bin/elevated-cycling"];
+            };
+          };
+          # wrapper = pkgs.writeWrapperShellScriptBin "docker-compose"
+          # TODO: write an application that is the entrypoint to docker
+
+          # Prod would usually mean prod databases and in the cloud.
+          # We're never really going to prod. 
+          # Our dev is the cargo watch -x run --bin elevated-cycling <fiules>
+        in {
           devShells.default = pkgs.mkShell common;
         }
     );
