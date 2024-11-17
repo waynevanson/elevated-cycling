@@ -83,14 +83,14 @@ pub struct EdgeWeight {
     pub gradient: f64,
 }
 
-// The pattern is "Read from file and if it doesn't exist then make it exist"
 pub async fn get() -> Result<(HashMap<i64, (geo::Point, f64)>, DiGraphMap<i64, EdgeWeight>)> {
     let url = "postgres://user:password@localhost:5432/elevated-cycling";
     let pool = PgPool::connect(url).await?;
 
     let client = reqwest::Client::new();
 
-    let graph = get_nodes_from_db(&pool).await?;
+    // read ways nodeids and nodes with points from osm ALWAYS
+    // SQL add nodes
 
     // Read from files, otherwise create them.
     // info!("Creating graph");

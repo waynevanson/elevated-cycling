@@ -20,96 +20,94 @@
           inherit system;
           overlays = [fenix.overlays.default];
         };
-      in
-        with pkgs; let
-          # utility functions
-          createPkgConfigPath = deps: pkgs.lib.strings.concatStringsSep ":" (builtins.map (a: "${a}/lib/pkgconfig") deps);
-          createBindgenExtraClangArgs = deps: (builtins.map (a: ''-I"${a}/include"'') deps);
-          createRustFlags = deps: builtins.map (a: ''-L ${a}/lib'') deps;
 
-          rust' = fenix.packages.${system}.fromToolchainFile {
-            file = ./rust-toolchain.toml;
-            sha256 = "sha256-txii9/4eh2fR+unoHKlPVcGphsHefEiNI+5wLPoCTpA=";
-          };
+        # utility functions
+        createPkgConfigPath = deps: pkgs.lib.strings.concatStringsSep ":" (builtins.map (a: "${a}/lib/pkgconfig") deps);
+        createBindgenExtraClangArgs = deps: (builtins.map (a: ''-I"${a}/include"'') deps);
+        createRustFlags = deps: builtins.map (a: ''-L ${a}/lib'') deps;
 
-          naersk' = pkgs.callPackage naersk {
-            cargo = rust';
-            rustc = rust';
-          };
+        rust' = fenix.packages.${system}.fromToolchainFile {
+          file = ./rust-toolchain.toml;
+          sha256 = "sha256-txii9/4eh2fR+unoHKlPVcGphsHefEiNI+5wLPoCTpA=";
+        };
 
-          codebase' = naersk'.buildPackage {
-            src = ./.;
-            cargoClippyOptions = _: ["-A clippy::all"];
-          };
+        naersk' = pkgs.callPackage naersk {
+          cargo = rust';
+          rustc = rust';
+        };
 
-          nativeBuildInputs = [
-            cargo-watch
-            cargo-tarpaulin
-            clang
-            codebase'
-            llvmPackages.bintools
-            openssl
-            openssl.dev
-            pkg-config
-            rust'
-            rust-analyzer-nightly
+        codebase' = naersk'.buildPackage {
+          name = "workspace";
+          src = ./.;
+          cargoClippyOptions = _: ["-A clippy::all"];
+        };
+        nativeBuildInputs = with pkgs; [
+          cargo-watch
+          cargo-tarpaulin
+          clang
+          codebase'
+          llvmPackages.bintools
+          openssl
+          openssl.dev
+          pkg-config
+          rust'
+          rust-analyzer-nightly
+        ];
+        buildInputs = with pkgs; [
+          openssl
+          pkg-config
+          docker
+          docker-compose
+        ];
+
+        environment = {
+          LIBCLANG_PATH = pkgs.lib.makeLibraryPath [
+            pkgs.llvmPackages_latest.libclang.lib
           ];
-          buildInputs = [
-            openssl
-            pkg-config
-            docker
-            docker-compose
-          ];
-
-          environment = {
-            LIBCLANG_PATH = lib.makeLibraryPath [
-              llvmPackages_latest.libclang.lib
+          RUSTFLAGS = createRustFlags [];
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (nativeBuildInputs ++ buildInputs);
+          BINGEN_EXTRA_CLANG_ARGS =
+            createBindgenExtraClangArgs (with pkgs; [glibc.dev])
+            ++ [
+              ''-I"${pkgs.llvmPackages_latest.libclang.lib}/lib/clang/${pkgs.llvmPackages_latest.libclang.version}/include"''
+              ''-I"${pkgs.glib.dev}/include/glib-2.0"''
+              ''-I${pkgs.glib.out}/lib/glib-2.0/include/''
             ];
-            RUSTFLAGS = createRustFlags [];
-            LD_LIBRARY_PATH = lib.makeLibraryPath (nativeBuildInputs ++ buildInputs);
-            BINGEN_EXTRA_CLANG_ARGS =
-              createBindgenExtraClangArgs (with pkgs; [glibc.dev])
-              ++ [
-                ''-I"${pkgs.llvmPackages_latest.libclang.lib}/lib/clang/${pkgs.llvmPackages_latest.libclang.version}/include"''
-                ''-I"${pkgs.glib.dev}/include/glib-2.0"''
-                ''-I${pkgs.glib.out}/lib/glib-2.0/include/''
-              ];
-            PKG_CONFIG_PATH = createPkgConfigPath buildInputs;
+          PKG_CONFIG_PATH = createPkgConfigPath buildInputs;
+        };
+
+        shellHook = ''
+          export PATH=$PATH:''${CARGO_HOME:-~/.cargo}/bin
+          export PATH=$PATH:''${RUSTUP_HOME:-~/.rustup}/toolchains/$RUSTC_VERSION-x86_64-unknown-linux-gnu/bin/
+        '';
+        common = environment // {inherit nativeBuildInputs buildInputs shellHook;};
+
+        elevated-cycling = {
+          cli = naersk'.buildPackage {
+            name = "elevated-cycling-cli";
+            version = "0.0.0";
+            src = ./.;
+            cargoBuildArgs = args: args ++ ["--bin elevated-cycling"];
           };
+        };
 
-          shellHook = ''
-            export PATH=$PATH:''${CARGO_HOME:-~/.cargo}/bin
-            export PATH=$PATH:''${RUSTUP_HOME:-~/.rustup}/toolchains/$RUSTC_VERSION-x86_64-unknown-linux-gnu/bin/
-          '';
-          common = environment // {inherit nativeBuildInputs buildInputs shellHook;};
+        main = pkgs.dockerTools.buildImage {
+          name = "elevated-cycling";
+          tag = "latest";
 
-          elevated-cycling = {
-            cli = naersk'.buildPackage {
-              name = "elevated-cycling-cli";
-              version = "0.0.0";
-              src = ./.;
-              cargoBuildArgs = args: args ++ ["--bin elevated-cycling"];
-            };
+          contents = [elevated-cycling.cli];
+
+          config = {
+            Cmd = ["RUST_LOG=info" "/bin/elevated-cycling"];
           };
-
-          main = pkgs.dockerTools.buildImage {
-            name = "elevated-cycling";
-            tag = "latest";
-
-            contents = [elevated-cycling.cli];
-
-            config = {
-              Cmd = ["RUST_LOG=info" "/bin/elevated-cycling"];
-            };
-          };
-          # wrapper = pkgs.writeWrapperShellScriptBin "docker-compose"
-          # TODO: write an application that is the entrypoint to docker
-
-          # Prod would usually mean prod databases and in the cloud.
-          # We're never really going to prod. 
-          # Our dev is the cargo watch -x run --bin elevated-cycling <fiules>
-        in {
-          devShells.default = pkgs.mkShell common;
-        }
+        };
+        # wrapper = pkgs.writeWrapperShellScriptBin "docker-compose"
+        # TODO: write an application that is the entrypoint to docker
+        # Prod would usually mean prod databases and in the cloud.
+        # We're never really going to prod.
+        # Our dev is the cargo watch -x run --bin elevated-cycling <fiules>
+      in {
+        devShells.default = pkgs.mkShell common;
+      }
     );
 }
