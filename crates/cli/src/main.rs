@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use clap_verbosity_flag::{LevelFilter, Verbosity};
-use std::path::PathBuf;
+use clap_verbosity_flag::LevelFilter;
+use elevated_cycling_cli::{ParsedArgs, RawArgs};
 
 fn main() -> Result<()> {
     let args = try_get_args()?;
@@ -22,35 +22,4 @@ fn try_get_args() -> Result<ParsedArgs> {
     let args = ParsedArgs::from(raw_args);
 
     Ok(args)
-}
-
-#[derive(Debug, Parser)]
-struct RawArgs {
-    /// File path to `planet.osm.pbf`, to read map information from.
-    ///
-    /// Defaults to `"$PWD/planet.osm.pbf"`
-    #[arg(long)]
-    planet: Option<PathBuf>,
-
-    /// Forces reading from `planet.osm.pbf`, even when a cache exists.
-    #[arg(short, long)]
-    force: bool,
-
-    #[command(flatten)]
-    verbose: Verbosity,
-}
-
-#[derive(Debug)]
-struct ParsedArgs {
-    planet: PathBuf,
-    force: bool,
-}
-
-impl From<RawArgs> for ParsedArgs {
-    fn from(RawArgs { force, planet, .. }: RawArgs) -> Self {
-        Self {
-            force,
-            planet: planet.unwrap_or_else(|| PathBuf::from("./planet.osm.pbf")),
-        }
-    }
 }
