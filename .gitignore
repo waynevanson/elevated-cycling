@@ -3,4 +3,5 @@ dist/
 target/
 planet.osm.pbf
 .direnv/
-/images/elevation/data
+archive.tar.xz
+/bulk

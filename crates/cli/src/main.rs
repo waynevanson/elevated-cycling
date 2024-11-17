@@ -1,9 +1,12 @@
+use std::path::Path;
+
 use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::LevelFilter;
 use elevated_cycling_cli::{ParsedArgs, RawArgs};
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = try_get_args()?;
 
     Ok(())
@@ -22,4 +25,9 @@ fn try_get_args() -> Result<ParsedArgs> {
     let args = ParsedArgs::from(raw_args);
 
     Ok(args)
+}
+
+// todo: test: download osm_pbf
+fn create_elements(file: &Path) -> Result<()> {
+    Ok(())
 }
