@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Default configuration
-DEFAULT_MAX_BATCH_SIZE=$((1024 * 1024 * 5)) # Default batch size (5 MB)
+DEFAULT_MAX_BATCH_SIZE=$((2 ** 30)) # Default batch size (1 GB)
 
 # Parse arguments
 MAX_BATCH_SIZE=$DEFAULT_MAX_BATCH_SIZE
@@ -59,9 +59,14 @@ echo "Max batch size: $MAX_BATCH_SIZE bytes"
 # Function to calculate the size of a commit
 calculate_commit_size() {
     commit=$1
-    git bundle create /tmp/tmp.bundle "$commit^..$commit" > /dev/null 2>&1
-    size=$(stat -c%s /tmp/tmp.bundle)
-    rm -f /tmp/tmp.bundle
+    # Check if the commit has a parent
+    if git rev-parse "$commit^" >/dev/null 2>&1; then
+        git bundle create ./.tmp/tmp.bundle "$commit^..$commit" > /dev/null 2>&1
+    else
+        git bundle create ./.tmp/tmp.bundle "$commit" > /dev/null 2>&1
+    fi
+    size=$(stat -c%s ./.tmp/tmp.bundle)
+    rm -f ./.tmp/tmp.bundle
     echo "$size"
 }
 
@@ -77,8 +82,15 @@ current_batch=""
 current_batch_size=0
 
 for commit in $COMMITS; do
+    echo commit: "$commit"
+    calculate_commit_size "$commit"
+    exit 1
     commit_size=$(calculate_commit_size "$commit")
-    current_batch_size=$(expr "$current_batch_size" + "$commit_size")
+    current_batch_size=$(expr 0 + "$current_batch_size" + "$commit_size" + 0)
+
+    echo yo "$commit_size" "$current_batch_size" yo
+
+    exit 1
 
     if [ "$current_batch_size" -gt "$MAX_BATCH_SIZE" ]; then
         if [ -n "$current_batch" ]; then

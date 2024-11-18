@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Default size
-SIZE="100MB"
+SIZE="50MB"
 
 # Parse options
 while [ "$#" -gt 0 ]; do
@@ -32,8 +32,6 @@ fi
 
 SOURCE="$1"
 PARTS="$2"
-
-
 
 # Ensure destination directory exists
 mkdir -p "$PARTS"

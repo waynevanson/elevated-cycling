@@ -35,15 +35,15 @@ pub async fn get_nodes_from_db(pool: &PgPool) -> Result<HashMap<i64, (Point, Opt
     Ok(points)
 }
 
-pub async fn get_graph_from_db(pool: &PgPool) -> Result<DiGraphMap<i64, (f64, Option<f64>)>> {
-    let sql = "SELECT origin, destination, gradient, distance FROM nodes";
-    let query = sqlx::query_as::<_, EdgeRow>(sql);
-    let edges = query.fetch_all(pool).await?;
+// pub async fn get_graph_from_db(pool: &PgPool) -> Result<DiGraphMap<i64, (f64, Option<f64>)>> {
+//     let sql = "SELECT origin, destination, gradient, distance FROM nodes";
+//     let query = sqlx::query_as::<_, EdgeRow>(sql);
+//     let edges = query.fetch_all(pool).await?;
 
-    let graph = edges
-        .into_iter()
-        .map(|row| (row.origin, row.destination, (row.distance, row.gradient)))
-        .collect();
+//     let graph = edges
+//         .into_iter()
+//         .map(|row| (row.origin, row.destination, (row.distance, row.gradient)))
+//         .collect();
 
-    Ok(graph)
-}
+//     Ok(graph)
+// }
