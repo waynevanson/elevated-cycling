@@ -1,2 +1,4 @@
 #!/bin/sh
-cat parts/* | xz -d -c | tar xf -
+
+# read and combine contents, uncompress, untar
+cat "$@" | xz -d -c | tar xf -
