@@ -45,11 +45,11 @@ fn main() -> Result<()> {
     let mut reader = create_source_reader(args.file)?;
 
     let range = from_bounded_bytesize_to_u64(args.range);
-    let mut writer = Encoder::try_new(
+    let mut writer = Encoder::new(
         args.prefix.unwrap_or_else(|| PathBuf::from("")),
         range,
         args.factor,
-    )?;
+    );
 
     std::io::copy(&mut reader, &mut writer)?;
 

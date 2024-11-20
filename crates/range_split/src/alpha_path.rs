@@ -9,6 +9,12 @@ impl AsRef<Path> for AlphaPathSegment {
     }
 }
 
+impl AlphaPathSegment {
+    pub fn from_factor(factor: usize) -> Self {
+        AlphaPathSegment(vec!['a'; factor].into_iter().collect())
+    }
+}
+
 // aa -> ab
 // az -> ba
 // zz -> zza

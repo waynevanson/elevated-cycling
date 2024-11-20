@@ -5,3 +5,4 @@ planet.osm.pbf
 .direnv/
 archive.tar.xz
 /bulk
+/bits

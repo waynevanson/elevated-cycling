@@ -2000,6 +2000,7 @@ dependencies = [
  "clap",
  "clap-verbosity-flag",
  "env_logger",
+ "log",
  "rand",
  "rangetools",
  "thiserror 2.0.3",
