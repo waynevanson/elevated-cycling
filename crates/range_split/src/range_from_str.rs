@@ -5,7 +5,7 @@ use std::{
 };
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum BoundedRangeParseError<T>
 where
     T: FromStr,
@@ -44,7 +44,7 @@ where
     }
     .into();
 
-    let second = &str[index + 1..last];
+    let second = &str[(index + 1)..last];
     let value = T::from_str(second).map_err(ValueError)?;
     let end: UpperBound<T> = match &str[str.len() - 1..str.len()] {
         "]" => Bound::Included(value),
@@ -75,10 +75,31 @@ where
             Err(MoreThanOneComma)?
         }
 
-        comma = Some(index);
+        comma = Some(index + 1);
     }
 
     let index = comma.ok_or(LessThanOneComma)?;
 
     Ok(index)
+}
+
+#[cfg(test)]
+mod test {
+    use bytesize::ByteSize;
+
+    use super::*;
+
+    #[test]
+    fn i() {
+        let str = "(1KB,10MB)";
+        let expected = (1_000, 10_000_000);
+
+        assert_eq!(
+            try_from_str::<ByteSize>(str).unwrap(),
+            BoundedRange::new(
+                LowerBound::excluded(ByteSize::b(expected.0)),
+                UpperBound::excluded(ByteSize::b(expected.1))
+            )
+        );
+    }
 }
