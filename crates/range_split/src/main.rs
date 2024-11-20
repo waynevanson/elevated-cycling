@@ -7,9 +7,15 @@ use std::{fs::File, io::Read, ops::Range, path::PathBuf};
 
 #[derive(Debug, Parser)]
 struct Encode {
+    /// the path prefixed to the start of the generated file.
+    /// Can be a directory or a path.
     #[arg(short, long, default_value = r#""""#)]
     prefix: Option<PathBuf>,
 
+    /// How many characters file names will be.
+    /// `aaaa` is the default start when set to `4`.
+    ///
+    /// When this overflows, it will be `zzzz[a-z]` then `zzzzz[a-z]`.
     #[arg(short, long, default_value_t = 4)]
     factor: usize,
 
