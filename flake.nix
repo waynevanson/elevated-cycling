@@ -91,6 +91,13 @@
           };
         };
 
+        range-split = naersk'.buildPackage {
+          name = "range-split";
+          version = "0.0.0";
+          src = ./.;
+          cargoBuildArgs = args: args ++ ["--bin range-split"];
+        };
+
         main = pkgs.dockerTools.buildImage {
           name = "elevated-cycling";
           tag = "latest";
@@ -107,6 +114,7 @@
         # We're never really going to prod.
         # Our dev is the cargo watch -x run --bin elevated-cycling <fiules>
       in {
+        packages.range-split = elevated-cycling.range-split;
         devShells.default = pkgs.mkShell common;
       }
     );

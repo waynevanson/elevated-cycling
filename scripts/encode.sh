@@ -37,4 +37,4 @@ PARTS="$2"
 mkdir -p "$PARTS"
 
 # Create tarball, compress, and split
-tar cf - "$SOURCE" | xz -9 -c | split -a 8 -b "$SIZE" - "$PARTS"
+tar cf - "$SOURCE" | xz -9 -c | range-split -vvvv --factor 16 --prefix "$PARTS" "$SIZE"
