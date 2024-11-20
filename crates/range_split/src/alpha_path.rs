@@ -10,7 +10,7 @@ pub struct AlphaPathSegment(pub String);
 // if z, may have to add something if they're all z.
 
 impl AlphaPathSegment {
-    fn increment_mut(&mut self) {
+    pub fn increment_mut(&mut self) {
         // true when we need to iterate and update;
         // false when we need to check for all z's and don't need to update.
         let mut update = true;
