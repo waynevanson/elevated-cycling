@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bytesize::ByteSize;
 use clap::Parser;
-use obfuscat::{try_from_str, Encoder};
+use range_split::{try_from_str, Encoder};
 use rangetools::BoundedRange;
 use std::{fs::File, io::Read, ops::Range, path::PathBuf};
 
