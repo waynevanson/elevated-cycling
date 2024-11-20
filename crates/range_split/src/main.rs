@@ -16,7 +16,7 @@ struct Encode {
     /// The range of file sizes that can be generated.
     /// The last generated file has no lower bound.
     ///
-    /// [n,N] (n,N) [N,N) (n,N]
+    /// [n,N] (n,N) [n,N) (n,N]
     #[arg(value_parser = try_from_str::<ByteSize>)]
     range: BoundedRange<ByteSize>,
 
