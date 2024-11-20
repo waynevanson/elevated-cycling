@@ -1,6 +1,8 @@
 use rand::{rngs::ThreadRng, thread_rng, Rng};
 use std::{fs::File, io::Write, ops::Range, path::PathBuf};
 
+use crate::AlphaPathSegment;
+
 #[derive(Debug)]
 pub struct Encoder {
     writer: File,
@@ -8,7 +10,7 @@ pub struct Encoder {
     path: PathBuf,
     range: Range<u64>,
 
-    suffix: String,
+    suffix: AlphaPathSegment,
     remaining: u64,
 }
 
@@ -16,6 +18,7 @@ impl Encoder {
     pub fn try_new(path: PathBuf, range: Range<u64>, factor: usize) -> std::io::Result<Self> {
         let suffix: String = vec!['a'; factor].into_iter().collect();
         let full = path.join(&suffix);
+        let suffix = AlphaPathSegment(suffix);
         std::fs::create_dir_all(&path)?;
         let writer = File::create(&full)?;
         let mut rng = thread_rng();
@@ -47,8 +50,7 @@ impl Write for Encoder {
             // get ready for the next
             self.writer.flush()?;
 
-            // todo: increment suffix
-            self.suffix = self.suffix.clone();
+            self.suffix.increment_mut();
 
             let filepath = self.path.join(&self.suffix);
 

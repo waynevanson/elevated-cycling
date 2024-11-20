@@ -1,5 +1,13 @@
+use std::path::Path;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AlphaPathSegment(pub String);
+
+impl AsRef<Path> for AlphaPathSegment {
+    fn as_ref(&self) -> &Path {
+        self.0.as_ref()
+    }
+}
 
 // aa -> ab
 // az -> ba
