@@ -29,17 +29,15 @@ impl AlphaPathSegment {
             }
 
             match byte {
-                b'z' => match all_zs {
-                    None => {
+                b'z' => {
+                    if all_zs.is_none() {
                         all_zs = Some(true);
-                    }
-                    Some(true) => {}
-                    Some(false) => {
-                        if update {
-                            *byte = b'a';
-                        };
-                    }
-                },
+                    };
+
+                    if update {
+                        *byte = b'a';
+                    };
+                }
                 b'a'..b'z' => {
                     // not all z's
                     all_zs = Some(false);
@@ -56,16 +54,11 @@ impl AlphaPathSegment {
         }
 
         if let Some(true) = all_zs {
-            self.0.push('a');
-        // move loop here.
-        } else {
-            for byte in bytes_mut.iter_mut().rev() {
-                if byte != &b'z' {
-                    break;
-                }
-
-                *byte = b'a';
+            for byte in bytes_mut.iter_mut() {
+                *byte = b'z';
             }
+
+            self.0.push('a');
         }
     }
 }
@@ -74,14 +67,18 @@ impl AlphaPathSegment {
 mod test {
     use super::*;
 
+    fn test_alpha_segment(input: &str, expected: &str) {
+        let mut segment = AlphaPathSegment(input.to_string());
+        segment.increment_mut();
+        assert_eq!(AlphaPathSegment(expected.to_string()), segment);
+    }
+
     #[test]
     fn aa_ab() {
         let input = "aa";
         let expected = "ab";
 
-        let mut segment = AlphaPathSegment(input.to_string());
-        segment.increment_mut();
-        assert_eq!(AlphaPathSegment(expected.to_string()), segment);
+        test_alpha_segment(input, expected);
     }
 
     #[test]
@@ -89,9 +86,7 @@ mod test {
         let input = "az";
         let expected = "ba";
 
-        let mut segment = AlphaPathSegment(input.to_string());
-        segment.increment_mut();
-        assert_eq!(AlphaPathSegment(expected.to_string()), segment);
+        test_alpha_segment(input, expected);
     }
 
     #[test]
@@ -99,8 +94,6 @@ mod test {
         let input = "zz";
         let expected = "zza";
 
-        let mut segment = AlphaPathSegment(input.to_string());
-        segment.increment_mut();
-        assert_eq!(AlphaPathSegment(expected.to_string()), segment);
+        test_alpha_segment(input, expected);
     }
 }
