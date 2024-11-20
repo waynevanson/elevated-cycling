@@ -28,7 +28,6 @@ struct Encode {
 
     /// The file to read contents from.
     /// If omitted, defaults to standard input.
-    #[arg(default_value = "<stdin>")]
     file: Option<PathBuf>,
 }
 
