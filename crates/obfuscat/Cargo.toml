@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.93"
+bytesize = { version = "1.3.0", features = ["serde"] }
 clap = { version = "4.5.21", features = ["derive"] }
 rand = "0.8.5"
-tar = "0.4.43"
-xz = "0.1.0"
+rangetools = { version = "0.1.4", features = ["serde"] }
+thiserror = "2.0.3"
