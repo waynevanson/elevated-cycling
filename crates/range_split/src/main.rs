@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bytesize::ByteSize;
 use clap::Parser;
+use clap_verbosity_flag::Verbosity;
 use range_split::{try_from_str, Encoder};
 use rangetools::BoundedRange;
 use std::{fs::File, io::Read, ops::Range, path::PathBuf};
@@ -19,6 +20,9 @@ struct Encode {
     #[arg(short, long, default_value_t = 4)]
     factor: usize,
 
+    #[command(flatten)]
+    verbosity: Verbosity,
+
     /// The range of file sizes that can be generated.
     /// The last generated file has no lower bound.
     ///
@@ -33,6 +37,10 @@ struct Encode {
 
 fn main() -> Result<()> {
     let args = Encode::parse();
+
+    env_logger::builder()
+        .filter_level(args.verbosity.log_level_filter())
+        .try_init()?;
 
     let mut reader = create_source_reader(args.file)?;
 
