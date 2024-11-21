@@ -1,6 +1,6 @@
 use crate::AlphaPathSegment;
 use bytesize::ByteSize;
-use log::{debug, info};
+use log::debug;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use std::{
     fs::{self, File},
@@ -9,8 +9,9 @@ use std::{
     path::PathBuf,
 };
 
+/// A file split encoder that transforms a file input to a file output.
 #[derive(Debug)]
-pub struct Encoder {
+pub struct FileSplitEncoder {
     /// Used to ensure the PRNG only outputs within the specified range.
     range: Range<u64>,
 
@@ -36,7 +37,7 @@ pub struct Encoder {
     remaining: Option<u64>,
 }
 
-impl Encoder {
+impl FileSplitEncoder {
     /// Creates a new encoder for writing files.
     pub fn new(prefix: PathBuf, range: Range<u64>, factor: usize) -> Self {
         let suffix = AlphaPathSegment::from_factor(factor);
@@ -62,7 +63,7 @@ impl Encoder {
     }
 }
 
-impl Write for Encoder {
+impl Write for FileSplitEncoder {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if let None = self.rng {
             self.rng = Some(SmallRng::seed_from_u64(*buf.get(0).unwrap() as u64));

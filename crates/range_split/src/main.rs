@@ -2,7 +2,7 @@ use anyhow::Result;
 use bytesize::ByteSize;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
-use range_split::{try_from_str, Encoder};
+use range_split::{try_from_str, FileSplitEncoder};
 use rangetools::BoundedRange;
 use std::{fs::File, io::Read, ops::Range, path::PathBuf};
 
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     let mut reader = create_source_reader(args.file)?;
 
     let range = from_bounded_bytesize_to_u64(args.range);
-    let mut writer = Encoder::new(
+    let mut writer = FileSplitEncoder::new(
         args.prefix.unwrap_or_else(|| PathBuf::from("")),
         range,
         args.factor,
