@@ -58,6 +58,8 @@
           pkg-config
           docker
           docker-compose
+          gnutar
+          xz
         ];
 
         environment = {
