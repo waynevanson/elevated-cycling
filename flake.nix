@@ -46,20 +46,22 @@
           cargo-tarpaulin
           clang
           codebase'
+          git
+          git-lfs
+          gnutar
           llvmPackages.bintools
           openssl
           openssl.dev
           pkg-config
           rust'
           rust-analyzer-nightly
+          xz
         ];
         buildInputs = with pkgs; [
           openssl
           pkg-config
           docker
           docker-compose
-          gnutar
-          xz
         ];
 
         environment = {
