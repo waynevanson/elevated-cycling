@@ -95,13 +95,6 @@
           };
         };
 
-        range-split = naersk'.buildPackage {
-          name = "range-split";
-          version = "0.0.0";
-          src = ./.;
-          cargoBuildArgs = args: args ++ ["--bin range-split"];
-        };
-
         main = pkgs.dockerTools.buildImage {
           name = "elevated-cycling";
           tag = "latest";
