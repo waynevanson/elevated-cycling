@@ -19,6 +19,7 @@
         pkgs = import nixpkgs {
           inherit system;
           overlays = [fenix.overlays.default];
+          config.allowUnfree  = true;
         };
 
         # utility functions
@@ -47,21 +48,20 @@
           clang
           codebase'
           git
-          git-lfs
-          gnutar
           llvmPackages.bintools
           openssl
           openssl.dev
           pkg-config
           rust'
           rust-analyzer-nightly
-          xz
+          unrar
         ];
         buildInputs = with pkgs; [
           openssl
           pkg-config
           docker
           docker-compose
+          unrar
         ];
 
         environment = {

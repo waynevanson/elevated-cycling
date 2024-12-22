@@ -1,21 +1,12 @@
 // tokio causing this error
 #![allow(clippy::needless_return)]
+mod download;
 
-use anyhow::{anyhow, Result};
-use bytesize::ByteSize;
+use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::LevelFilter;
+use download::download_with_cachable;
 use elevated_cycling::{ParsedArgs, RawArgs};
-use futures::StreamExt;
-use reqwest::{
-    header::{HeaderMap, HeaderValue, RANGE},
-    IntoUrl,
-};
-use std::path::{Path, PathBuf};
-use tokio::{
-    fs::{create_dir_all, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt},
-};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,6 +14,8 @@ async fn main() -> Result<()> {
     let client = reqwest::Client::new();
 
     download_planet_osm_pbf(&client, args.version).await?;
+    download_elevations(&client).await?;
+    // unrar elevations
 
     return Ok(());
 }
@@ -40,79 +33,26 @@ fn try_get_args() -> Result<ParsedArgs> {
     Ok(args)
 }
 
-async fn download_with_cachable(
-    client: &reqwest::Client,
-    url: impl IntoUrl,
-    file_path: impl AsRef<Path>,
-) -> Result<()> {
-    let file_path = PathBuf::from(".cached").join(&file_path);
-
-    // Check existing file size
-    let existing_size = if let Ok(metadata) = tokio::fs::metadata(&file_path).await {
-        metadata.len()
-    } else {
-        0
-    };
-
-    if existing_size > 0 {
-        println!(
-            "Reading from existing file of size {}",
-            ByteSize::b(existing_size)
-        );
-    }
-
-    // Add `Range` header for resuming download
-    let mut headers = HeaderMap::new();
-    if existing_size > 0 {
-        headers.insert(
-            RANGE,
-            HeaderValue::from_str(&format!("bytes={}-", existing_size))?,
-        );
-    }
-
-    let response = client.get(url.as_str()).send().await?;
-
-    // Ensure partial content or complete download
-    if !(response.status().is_success() || response.status().as_u16() == 206) {
-        return Err(anyhow!("Failed to download: HTTP {}", response.status()));
-    }
-
-    let suffix = response
-        .content_length()
-        .map(ByteSize::b)
-        .map(|size| format!(" of total size {size}"))
-        .unwrap_or_default();
-
-    println!("Total size of {suffix}");
-
-    println!("Downloading from {}", url.as_str());
-
-    if let Some(parent) = PathBuf::from(&file_path).parent() {
-        create_dir_all(parent).await?;
-    };
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
-        .await?;
-
-    file.seek(std::io::SeekFrom::Start(existing_size)).await?;
-
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        file.write_all(&chunk?).await?;
-    }
-
-    Ok(())
-}
-
 async fn download_planet_osm_pbf(client: &reqwest::Client, version: String) -> Result<()> {
     let file_name = format!("planet-{version}.osm.pbf");
     let url = format!("https://planet.openstreetmap.org/pbf/{file_name}");
 
     download_with_cachable(client, url, file_name).await?;
+
+    Ok(())
+}
+
+async fn download_elevations(client: &reqwest::Client) -> Result<()> {
+    let file_names = [
+        "SRTM_NE_250m_TIF.rar",
+        "SRTM_SE_250m_TIF.rar",
+        "SRTM_W_250m_TIF.rar",
+    ];
+
+    for file_name in file_names {
+        let url = "https://srtm.csi.cgiar.org/wp-content/uploads/files/250m/SRTM_NE_250m_TIF.rar";
+        download_with_cachable(client, url, file_name).await?;
+    }
 
     Ok(())
 }
