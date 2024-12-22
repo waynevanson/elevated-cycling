@@ -77,6 +77,14 @@ async fn download_with_cachable(
         return Err(anyhow!("Failed to download: HTTP {}", response.status()));
     }
 
+    let suffix = response
+        .content_length()
+        .map(ByteSize::b)
+        .map(|size| format!(" of total size {size}"))
+        .unwrap_or_default();
+
+    println!("Total size of {suffix}");
+
     println!("Downloading from {}", url.as_str());
 
     if let Some(parent) = PathBuf::from(&file_path).parent() {
