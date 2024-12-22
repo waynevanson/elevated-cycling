@@ -9,7 +9,7 @@ pub struct RawArgs {
     /// Version of `planet.osm.pbf` to read.
     /// Available to read from
     /// https://planet.openstreetmap.org/pbf/
-    #[arg(long, default_value = "241206")]
+    #[arg(long, default_value = "241216")]
     version: String,
 
     #[command(flatten)]
