@@ -1,22 +1,16 @@
 #![feature(let_chains)]
-
 mod traits;
 
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
-use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 pub struct RawArgs {
-    /// File path to `planet.osm.pbf`, to read map information from.
-    ///
-    /// Defaults to `"$PWD/planet.osm.pbf"`
-    #[arg(long)]
-    planet: Option<PathBuf>,
-
-    /// Forces reading from `planet.osm.pbf`, even when a cache exists.
-    #[arg(short, long)]
-    force: bool,
+    /// Version of `planet.osm.pbf` to read.
+    /// Available to read from
+    /// https://planet.openstreetmap.org/pbf/
+    #[arg(long, default_value = "241206")]
+    version: String,
 
     #[command(flatten)]
     pub verbose: Verbosity,
@@ -24,15 +18,11 @@ pub struct RawArgs {
 
 #[derive(Debug)]
 pub struct ParsedArgs {
-    pub planet: PathBuf,
-    pub force: bool,
+    pub version: String,
 }
 
 impl From<RawArgs> for ParsedArgs {
-    fn from(RawArgs { force, planet, .. }: RawArgs) -> Self {
-        Self {
-            force,
-            planet: planet.unwrap_or_else(|| PathBuf::from("./planet.osm.pbf")),
-        }
+    fn from(RawArgs { version, .. }: RawArgs) -> Self {
+        Self { version }
     }
 }
