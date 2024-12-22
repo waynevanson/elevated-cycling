@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::LevelFilter;
-use elevated_cycling_cli::{ParsedArgs, RawArgs};
+use elevated_cycling::{ParsedArgs, RawArgs};
 
 #[tokio::main]
 async fn main() -> Result<()> {

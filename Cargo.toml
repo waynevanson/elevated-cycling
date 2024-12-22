@@ -1,3 +1,17 @@
-[workspace]
-members = ["crates/*"]
-resolver = "2"
+[package]
+name = "elevated-cycling"
+authors = ["Wayne Van Son"]
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.21", features = ["env", "derive"] }
+clap-verbosity-flag = "2.2.3"
+anyhow = "1.0.93"
+env_logger = "0.11.5"
+osmpbf = "0.3.4"
+tokio = { version = "1.41.1", features = ["full"] }
+itertools = "0.13.0"
+num-traits = "0.2.19"
+futures = "0.3.31"
+geo = "0.29.3"
+len-trait = "0.6.1"

@@ -12,7 +12,7 @@ where
         E: Send + Sync,
         C: Default + Extend<T>,
     {
-        if max_concurrency <= 0 {
+        if max_concurrency == 0 {
             panic!(
                 "Expected max_concurency to be greater than 0 but received {}",
                 max_concurrency

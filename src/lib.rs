@@ -1,3 +1,7 @@
+#![feature(let_chains)]
+
+mod traits;
+
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use std::path::PathBuf;
