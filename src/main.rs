@@ -1,58 +1,70 @@
-// tokio causing this error
-#![allow(clippy::needless_return)]
+#![feature(let_chains)]
 mod download;
+mod traits;
 
+use crate::traits::{IntoNodeIdPoint, ParMapCollect};
 use anyhow::Result;
 use clap::Parser;
-use clap_verbosity_flag::LevelFilter;
-use download::download_with_cachable;
-use elevated_cycling::{ParsedArgs, RawArgs};
+use clap_verbosity_flag::Verbosity;
+use log::info;
+use osmpbf::reader::ElementReader;
+use std::{collections::HashMap, fs::File, path::PathBuf};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = try_get_args()?;
-    let client = reqwest::Client::new();
+    let args = RawArgs::try_parse()?;
 
-    download_planet_osm_pbf(&client, args.version).await?;
-    download_elevations(&client).await?;
-    // unrar elevations
+    env_logger::Builder::new()
+        .filter_level(args.verbose.log_level_filter())
+        .try_init()?;
+
+    match args.subcommand {
+        SubCommand::Extract { map, cache } => {
+            let osm = File::open(&map)?;
+            let pbf = ElementReader::new(osm);
+
+            info!("Extracting data from {:?} into memory", map);
+
+            let points = pbf.par_map_collect(|element| {
+                let mut map = HashMap::with_capacity(1);
+                map.extend(element.node_id_point());
+                map
+            });
+
+            info!(
+                "Serializing {} units of data from memory to {:?}",
+                points.len(),
+                cache
+            );
+
+            let out_dir = File::create(&cache)?;
+
+            postcard::to_io(&points, out_dir)?;
+
+            info!("Serialized to {:?}", cache)
+        }
+    }
 
     return Ok(());
 }
 
-fn setup_logger(level: LevelFilter) -> Result<()> {
-    env_logger::Builder::new().filter_level(level).try_init()?;
-    Ok(())
+#[derive(Debug, Parser, Clone)]
+pub struct RawArgs {
+    #[command(flatten)]
+    pub verbose: Verbosity,
+
+    #[command(subcommand)]
+    pub subcommand: SubCommand,
 }
 
-fn try_get_args() -> Result<ParsedArgs> {
-    let raw_args = RawArgs::try_parse()?;
-    setup_logger(raw_args.verbose.log_level_filter())?;
+#[derive(Debug, Parser, Clone)]
+pub enum SubCommand {
+    /// Extracts only the data required from the `*.pbf` into a `.*.postcard` file
+    Extract {
+        #[arg(short, long, default_value = "./map.osm.pbf")]
+        map: PathBuf,
 
-    let args = ParsedArgs::from(raw_args);
-    Ok(args)
-}
-
-async fn download_planet_osm_pbf(client: &reqwest::Client, version: String) -> Result<()> {
-    let file_name = format!("planet-{version}.osm.pbf");
-    let url = format!("https://planet.openstreetmap.org/pbf/{file_name}");
-
-    download_with_cachable(client, url, file_name).await?;
-
-    Ok(())
-}
-
-async fn download_elevations(client: &reqwest::Client) -> Result<()> {
-    let file_names = [
-        "SRTM_NE_250m_TIF.rar",
-        "SRTM_SE_250m_TIF.rar",
-        "SRTM_W_250m_TIF.rar",
-    ];
-
-    for file_name in file_names {
-        let url = "https://srtm.csi.cgiar.org/wp-content/uploads/files/250m/SRTM_NE_250m_TIF.rar";
-        download_with_cachable(client, url, file_name).await?;
-    }
-
-    Ok(())
+        #[arg(short, long, default_value = ".cache.postcard")]
+        cache: PathBuf,
+    },
 }
