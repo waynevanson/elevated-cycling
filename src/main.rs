@@ -6,9 +6,10 @@ use crate::traits::{IntoNodeIdPoint, ParMapCollect};
 use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
+use geo::Point;
 use log::info;
 use osmpbf::reader::ElementReader;
-use std::{collections::HashMap, fs::File, path::PathBuf};
+use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -43,6 +44,21 @@ async fn main() -> Result<()> {
 
             info!("Serialized to {:?}", cache)
         }
+        SubCommand::Circuit { cache } => {
+            info!("Reading and deserializing data from {:?}", cache);
+
+            let mut buf = Vec::new();
+            let mut cache_file = File::open(&cache)?;
+            cache_file.read_to_end(&mut buf)?;
+
+            let points: HashMap<i64, Point> = postcard::from_bytes(&buf)?;
+
+            info!(
+                "Deserialized a total of {} units into memory from {:?} ",
+                points.len(),
+                cache
+            );
+        }
     }
 
     return Ok(());
@@ -61,9 +77,13 @@ pub struct RawArgs {
 pub enum SubCommand {
     /// Extracts only the data required from the `*.pbf` into a `.*.postcard` file
     Extract {
-        #[arg(short, long, default_value = "./map.osm.pbf")]
+        #[arg(short, long, default_value = "map.osm.pbf")]
         map: PathBuf,
 
+        #[arg(short, long, default_value = ".cache.postcard")]
+        cache: PathBuf,
+    },
+    Circuit {
         #[arg(short, long, default_value = ".cache.postcard")]
         cache: PathBuf,
     },
