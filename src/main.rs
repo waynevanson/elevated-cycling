@@ -26,6 +26,7 @@ async fn main() -> Result<()> {
         .try_init()?;
 
     match args.subcommand {
+        // todo: subcommand osm.pbf -> points and .tiff -> elevations
         SubCommand::Extract { map, cache } => {
             let osm = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&map)?);
             let pbf = ElementReader::new(osm);
@@ -67,6 +68,11 @@ async fn main() -> Result<()> {
                 points.len(),
                 cache
             );
+
+            // todo best case:
+            // scan geotiffs from files for ranges,
+            // store ranges in memory for reading the files,
+            // looking up coord is checking the range, reading the file, getting a point, caching the point.
         }
     }
 
