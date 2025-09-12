@@ -27,31 +27,42 @@ async fn main() -> Result<()> {
 
     match args.subcommand {
         // todo: subcommand osm.pbf -> points and .tiff -> elevations
-        SubCommand::Extract { map, cache } => {
-            let osm = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&map)?);
-            let pbf = ElementReader::new(osm);
+        SubCommand::Extract(extract) => {
+            match extract {
+                Extract::Coordinates { map, cache } => {
+                    let osm = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&map)?);
+                    let pbf = ElementReader::new(osm);
 
-            info!("Extracting data from {:?} into memory", map);
-            // ~31 seconds
+                    info!("Extracting data from {:?} into memory", map);
+                    // ~31 seconds
 
-            let points = pbf.par_map_collect(|element| {
-                let mut map = HashMap::with_capacity(1);
-                map.extend(element.node_id_point());
-                map
-            });
+                    let points = pbf.par_map_collect(|element| {
+                        let mut map = HashMap::with_capacity(1);
+                        map.extend(element.node_id_point());
+                        map
+                    });
 
-            info!(
-                "Serializing {} units of data from memory to {:?}",
-                points.len(),
-                cache
-            );
-            // ~ 5 seconds
+                    info!(
+                        "Serializing {} units of data from memory to {:?}",
+                        points.len(),
+                        cache
+                    );
+                    // ~ 5 seconds
 
-            let out_file = BufWriter::new(File::create(&cache)?);
+                    let out_file = BufWriter::new(File::create(&cache)?);
 
-            postcard::to_io(&points, out_file)?;
+                    postcard::to_io(&points, out_file)?;
 
-            info!("Serialized to {:?}", cache)
+                    info!("Serialized to {:?}", cache)
+                }
+                Extract::Elevations { .. } => {
+                    // todo best case:
+                    // scan geotiffs from files for ranges,
+                    // store ranges in memory for reading the files,
+                    // looking up coord is checking the range, reading the file, getting a point, caching the point.
+                    todo!()
+                }
+            }
         }
         SubCommand::Circuit { cache } => {
             info!("Reading and deserializing data from {:?}", cache);
@@ -68,11 +79,6 @@ async fn main() -> Result<()> {
                 points.len(),
                 cache
             );
-
-            // todo best case:
-            // scan geotiffs from files for ranges,
-            // store ranges in memory for reading the files,
-            // looking up coord is checking the range, reading the file, getting a point, caching the point.
         }
     }
 
@@ -90,16 +96,24 @@ pub struct RawArgs {
 
 #[derive(Debug, Parser, Clone)]
 pub enum SubCommand {
+    #[command(subcommand)]
     /// Extracts only the data required from the `*.pbf` into a `.*.postcard` file
-    Extract {
+    Extract(Extract),
+    Circuit {
+        #[arg(short, long, default_value = ".cache.postcard")]
+        cache: PathBuf,
+    },
+}
+
+// todo: both when there's no name and it's just extract
+#[derive(Debug, Parser, Clone)]
+pub enum Extract {
+    Coordinates {
         #[arg(short, long, default_value = "map.osm.pbf")]
         map: PathBuf,
 
         #[arg(short, long, default_value = ".cache.postcard")]
         cache: PathBuf,
     },
-    Circuit {
-        #[arg(short, long, default_value = ".cache.postcard")]
-        cache: PathBuf,
-    },
+    Elevations {},
 }
