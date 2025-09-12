@@ -1,5 +1,4 @@
 #![feature(let_chains)]
-mod download;
 mod traits;
 
 use crate::traits::{IntoNodeIdPoint, ParMapCollect};
@@ -9,7 +8,14 @@ use clap_verbosity_flag::Verbosity;
 use geo::Point;
 use log::info;
 use osmpbf::reader::ElementReader;
-use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufReader, BufWriter, Read},
+    path::PathBuf,
+};
+
+const READ_BUF_CAPACITY: usize = 8usize.pow(8);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,10 +27,11 @@ async fn main() -> Result<()> {
 
     match args.subcommand {
         SubCommand::Extract { map, cache } => {
-            let osm = File::open(&map)?;
+            let osm = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&map)?);
             let pbf = ElementReader::new(osm);
 
             info!("Extracting data from {:?} into memory", map);
+            // ~31 seconds
 
             let points = pbf.par_map_collect(|element| {
                 let mut map = HashMap::with_capacity(1);
@@ -37,18 +44,20 @@ async fn main() -> Result<()> {
                 points.len(),
                 cache
             );
+            // ~ 5 seconds
 
-            let out_dir = File::create(&cache)?;
+            let out_file = BufWriter::new(File::create(&cache)?);
 
-            postcard::to_io(&points, out_dir)?;
+            postcard::to_io(&points, out_file)?;
 
             info!("Serialized to {:?}", cache)
         }
         SubCommand::Circuit { cache } => {
             info!("Reading and deserializing data from {:?}", cache);
+            // ~21 seconds
 
             let mut buf = Vec::new();
-            let mut cache_file = File::open(&cache)?;
+            let mut cache_file = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&cache)?);
             cache_file.read_to_end(&mut buf)?;
 
             let points: HashMap<i64, Point> = postcard::from_bytes(&buf)?;
