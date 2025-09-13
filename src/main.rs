@@ -17,6 +17,9 @@ use std::{
 
 const READ_BUF_CAPACITY: usize = 8usize.pow(8);
 
+const DEFAULT_PATH_MAP_OSM_PBF: &str = "map.osm.pbf";
+const DEFAULT_PATH_COORDS: &str = ".coords.postcard";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = RawArgs::try_parse()?;
@@ -28,25 +31,25 @@ async fn main() -> Result<()> {
     match args.subcommand {
         SubCommand::Extract(extract) => {
             match extract {
-                // todo: needs to be a graph
-                Extract::Coordinates { map, cache } => {
+                // todo: reiterate for a graph
+                Extract::Coordinates { map, coords } => {
                     let points = derive_coords_from_osm_pbf(map)?;
 
                     info!(
                         "Serializing {} units of data from memory to {:?}",
                         points.len(),
-                        cache
+                        coords
                     );
                     // ~ 5 seconds
 
-                    let out_file = BufWriter::new(File::create(&cache)?);
+                    let out_file = BufWriter::new(File::create(&coords)?);
 
                     postcard::to_io(&points, out_file)?;
 
-                    info!("Serialized to {:?}", cache)
+                    info!("Serialized to {:?}", coords)
                 }
-                Extract::Elevations { cache, tiffs } => {
-                    let mut coords = read_coords(cache)?;
+                Extract::Elevations { coords, tiffs } => {
+                    let mut coords = read_coords(coords)?;
                     let mut all_elevations = HashMap::<i64, f64>::with_capacity(coords.len());
 
                     for tiff in tiffs {
@@ -146,7 +149,7 @@ pub enum SubCommand {
     /// Extracts only the data required from the `*.pbf` into a `.*.postcard` file
     Extract(Extract),
     Circuit {
-        #[arg(short, long, default_value = ".cache.postcard")]
+        #[arg(short, long, default_value = DEFAULT_PATH_COORDS)]
         cache: PathBuf,
     },
 }
@@ -156,15 +159,15 @@ pub enum SubCommand {
 pub enum Extract {
     #[command(alias = "coords")]
     Coordinates {
-        #[arg(short, long, default_value = "map.osm.pbf")]
+        #[arg(short, long, default_value = DEFAULT_PATH_MAP_OSM_PBF)]
         map: PathBuf,
 
-        #[arg(short, long, default_value = ".cache.postcard")]
-        cache: PathBuf,
+        #[arg(short, long, default_value = DEFAULT_PATH_COORDS)]
+        coords: PathBuf,
     },
     Elevations {
-        #[arg(short, long, default_value = ".cache.postcard")]
-        cache: PathBuf,
+        #[arg(short, long, default_value = DEFAULT_PATH_COORDS)]
+        coords: PathBuf,
 
         tiffs: Vec<PathBuf>,
     },
