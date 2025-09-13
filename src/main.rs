@@ -48,41 +48,32 @@ async fn main() -> Result<()> {
 
                     info!("Serialized to {:?}", cache)
                 }
-                Extract::Elevations { cache } => {
+                Extract::Elevations { cache, tiffs } => {
                     // remove elements from this?
                     let mut points = read_points(cache)?;
-                    // todo best case:
-                    // scan geotiffs from files for ranges,
-                    // store ranges in memory for reading the files,
-                    // looking up coord is checking the range, reading the file, getting a point, caching the point.
 
-                    // todo easiest case:
-                    // find range of geotiff via tiff crate, look up all points we have that fit it and keep going until we have all the coordinates.
+                    for tiff in tiffs {
+                        let file_in =
+                            BufReader::with_capacity(READ_BUF_CAPACITY, File::open(tiff)?);
 
-                    // FOR EACH HERE FOR DIR OF TILES or list of [file, ... files]
-                    // read entire file into memory
-                    let tiff =
-                        BufReader::with_capacity(READ_BUF_CAPACITY, File::open("elevations.tiff")?);
+                        let geotiff = geotiff::GeoTiff::read(file_in)?;
 
-                    let geotiff = geotiff::GeoTiff::read(tiff)?;
+                        let rect = geotiff.model_extent();
 
-                    let rect = geotiff.model_extent();
+                        let elevations = points
+                            .iter()
+                            .map(|(node_id, point)| (node_id, point.0))
+                            .filter(|(_, point)| rect.intersects(point))
+                            .filter_map(|(node_id, coord)| {
+                                geotiff
+                                    .get_value_at::<f64>(&coord, 1)
+                                    .map(|elevation| (*node_id, elevation))
+                            })
+                            .collect::<HashMap<i64, f64>>();
 
-                    // use rect and check to see if the points are in here
-
-                    let elevations = points
-                        .iter()
-                        .map(|(node_id, point)| (node_id, point.0))
-                        .filter(|(_, point)| rect.intersects(point))
-                        .filter_map(|(node_id, coord)| {
-                            geotiff
-                                .get_value_at::<f64>(&coord, 1)
-                                .map(|elevation| (*node_id, elevation))
-                        })
-                        .collect::<HashMap<i64, f64>>();
-
-                    for node_id in elevations.keys() {
-                        points.remove(node_id);
+                        for node_id in elevations.keys() {
+                            points.remove(node_id);
+                        }
                     }
 
                     todo!()
@@ -168,5 +159,7 @@ pub enum Extract {
     Elevations {
         #[arg(short, long, default_value = ".cache.postcard")]
         cache: PathBuf,
+
+        tiffs: Vec<PathBuf>,
     },
 }
