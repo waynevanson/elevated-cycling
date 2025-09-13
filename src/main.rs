@@ -2,17 +2,15 @@
 mod traits;
 
 use crate::traits::{IntoNodeIdPoint, ParMapCollect};
-use anyhow::{Error, Result};
+use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
-use geo::{Coord, Intersects, Point};
-use itertools::Itertools;
-use log::{info, warn};
+use geo::{Coord, Intersects};
+use log::info;
 use osmpbf::reader::ElementReader;
 use std::{
     collections::HashMap,
     fs::File,
-    hash::Hash,
     io::{BufReader, BufWriter, Read},
     path::{Path, PathBuf},
 };
@@ -28,7 +26,6 @@ async fn main() -> Result<()> {
         .try_init()?;
 
     match args.subcommand {
-        // todo: subcommand osm.pbf -> points and .tiff -> elevations
         SubCommand::Extract(extract) => {
             match extract {
                 // todo: needs to be a graph
@@ -49,31 +46,17 @@ async fn main() -> Result<()> {
                     info!("Serialized to {:?}", cache)
                 }
                 Extract::Elevations { cache, tiffs } => {
-                    // remove elements from this?
-                    let mut points = read_points(cache)?;
+                    let mut coords = read_coords(cache)?;
+                    let mut all_elevations = HashMap::<i64, f64>::with_capacity(coords.len());
 
                     for tiff in tiffs {
-                        let file_in =
-                            BufReader::with_capacity(READ_BUF_CAPACITY, File::open(tiff)?);
-
-                        let geotiff = geotiff::GeoTiff::read(file_in)?;
-
-                        let rect = geotiff.model_extent();
-
-                        let elevations = points
-                            .iter()
-                            .map(|(node_id, point)| (node_id, point.0))
-                            .filter(|(_, point)| rect.intersects(point))
-                            .filter_map(|(node_id, coord)| {
-                                geotiff
-                                    .get_value_at::<f64>(&coord, 1)
-                                    .map(|elevation| (*node_id, elevation))
-                            })
-                            .collect::<HashMap<i64, f64>>();
+                        let elevations = read_geotiff_to_elevations(&mut coords, tiff)?;
 
                         for node_id in elevations.keys() {
-                            points.remove(node_id);
+                            coords.remove(node_id);
                         }
+
+                        all_elevations.extend(elevations);
                     }
 
                     todo!()
@@ -88,14 +71,37 @@ async fn main() -> Result<()> {
     return Ok(());
 }
 
-fn derive_coords_from_osm_pbf(map: PathBuf) -> Result<HashMap<i64, Point>> {
+fn read_geotiff_to_elevations(
+    coords: &mut HashMap<i64, Coord>,
+    tiff: PathBuf,
+) -> Result<HashMap<i64, f64>> {
+    let file_in = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(tiff)?);
+
+    let geotiff = geotiff::GeoTiff::read(file_in)?;
+
+    let rect = geotiff.model_extent();
+
+    let elevations = coords
+        .iter()
+        .filter(|(_, coord)| rect.intersects(*coord))
+        .filter_map(|(node_id, coord)| {
+            geotiff
+                .get_value_at::<f64>(&coord, 1)
+                .map(|elevation| (*node_id, elevation))
+        })
+        .collect::<HashMap<i64, f64>>();
+
+    Ok(elevations)
+}
+
+fn derive_coords_from_osm_pbf(map: PathBuf) -> Result<HashMap<i64, Coord>> {
     let osm = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&map)?);
     let pbf = ElementReader::new(osm);
 
     info!("Extracting data from {:?} into memory", map);
     // ~31 seconds
 
-    let points = pbf.par_map_collect(|element| {
+    let coords = pbf.par_map_collect(|element| {
         let mut map = HashMap::with_capacity(1);
         map.extend(element.node_id_point());
         map
@@ -103,10 +109,10 @@ fn derive_coords_from_osm_pbf(map: PathBuf) -> Result<HashMap<i64, Point>> {
 
     info!("Extracted data from {:?} into memory", map);
 
-    Ok(points)
+    Ok(coords)
 }
 
-fn read_points(path: impl AsRef<Path>) -> Result<HashMap<i64, Point>> {
+fn read_coords(path: impl AsRef<Path>) -> Result<HashMap<i64, Coord>> {
     info!("Reading and deserializing data from {:?}", path.as_ref());
     // ~21 seconds
 
@@ -114,15 +120,15 @@ fn read_points(path: impl AsRef<Path>) -> Result<HashMap<i64, Point>> {
     let mut cache_file = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&path)?);
     cache_file.read_to_end(&mut buf)?;
 
-    let points: HashMap<i64, Point> = postcard::from_bytes(&buf)?;
+    let coords: HashMap<i64, Coord> = postcard::from_bytes(&buf)?;
 
     info!(
         "Deserialized a total of {} units into memory from {:?} ",
-        points.len(),
+        coords.len(),
         path.as_ref()
     );
 
-    Ok(points)
+    Ok(coords)
 }
 
 #[derive(Debug, Parser, Clone)]
