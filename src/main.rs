@@ -1,15 +1,15 @@
 #![feature(let_chains)]
+mod osm;
 mod traits;
 
-use crate::traits::{IntoNodeIdPoint, ParMapCollect};
+use crate::osm::{derive_coords_from_osm_pbf, get_unweighted_cyclable_graphmap_from_elements};
 use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use geo::{Coord, Intersects};
 use log::info;
-use osmpbf::reader::ElementReader;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{BufReader, BufWriter, Read},
     path::{Path, PathBuf},
@@ -19,6 +19,7 @@ const READ_BUF_CAPACITY: usize = 8usize.pow(8);
 
 const DEFAULT_PATH_MAP_OSM_PBF: &str = "map.osm.pbf";
 const DEFAULT_PATH_COORDS: &str = ".coords.postcard";
+const DEFAULT_PATH_ELEVATIONS: &str = ".elevations.postcard";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,7 +34,11 @@ async fn main() -> Result<()> {
             match extract {
                 // todo: reiterate for a graph
                 Extract::Coordinates { map, coords } => {
-                    let points = derive_coords_from_osm_pbf(map)?;
+                    let graph = get_unweighted_cyclable_graphmap_from_elements(&map)?;
+                    let cyclable_node_ids = graph.nodes().collect::<HashSet<i64>>();
+                    let points = derive_coords_from_osm_pbf(&map, &cyclable_node_ids)?;
+
+                    // todo. calc distances and elevations together?
 
                     info!(
                         "Serializing {} units of data from memory to {:?}",
@@ -48,7 +53,11 @@ async fn main() -> Result<()> {
 
                     info!("Serialized to {:?}", coords)
                 }
-                Extract::Elevations { coords, tiffs } => {
+                Extract::Elevations {
+                    coords,
+                    tiffs,
+                    elevations,
+                } => {
                     let mut coords = read_coords(coords)?;
                     let mut all_elevations = HashMap::<i64, f64>::with_capacity(coords.len());
 
@@ -62,7 +71,11 @@ async fn main() -> Result<()> {
                         all_elevations.extend(elevations);
                     }
 
-                    todo!()
+                    let out_file = BufWriter::new(File::create(&elevations)?);
+
+                    postcard::to_io(&coords, out_file)?;
+
+                    info!("Serialized to {:?}", coords)
                 }
             }
         }
@@ -95,24 +108,6 @@ fn read_geotiff_to_elevations(
         .collect::<HashMap<i64, f64>>();
 
     Ok(elevations)
-}
-
-fn derive_coords_from_osm_pbf(map: PathBuf) -> Result<HashMap<i64, Coord>> {
-    let osm = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&map)?);
-    let pbf = ElementReader::new(osm);
-
-    info!("Extracting data from {:?} into memory", map);
-    // ~31 seconds
-
-    let coords = pbf.par_map_collect(|element| {
-        let mut map = HashMap::with_capacity(1);
-        map.extend(element.node_id_point());
-        map
-    });
-
-    info!("Extracted data from {:?} into memory", map);
-
-    Ok(coords)
 }
 
 fn read_coords(path: impl AsRef<Path>) -> Result<HashMap<i64, Coord>> {
@@ -168,6 +163,9 @@ pub enum Extract {
     Elevations {
         #[arg(short, long, default_value = DEFAULT_PATH_COORDS)]
         coords: PathBuf,
+
+        #[arg(short, long, default_value = DEFAULT_PATH_ELEVATIONS)]
+        elevations: PathBuf,
 
         tiffs: Vec<PathBuf>,
     },
