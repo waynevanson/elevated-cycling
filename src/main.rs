@@ -1,4 +1,3 @@
-#![feature(let_chains)]
 mod osm;
 mod traits;
 
@@ -17,6 +16,7 @@ use std::{
 
 const READ_BUF_CAPACITY: usize = 8usize.pow(8);
 
+// maybe don't use paths and instead just push to stdout
 const DEFAULT_PATH_MAP_OSM_PBF: &str = "map.osm.pbf";
 const DEFAULT_PATH_COORDS: &str = ".coords.postcard";
 const DEFAULT_PATH_ELEVATIONS: &str = ".elevations.postcard";
@@ -35,10 +35,9 @@ async fn main() -> Result<()> {
                 // todo: reiterate for a graph
                 Extract::Coordinates { map, coords } => {
                     let graph = get_unweighted_cyclable_graphmap_from_elements(&map)?;
+
                     let cyclable_node_ids = graph.nodes().collect::<HashSet<i64>>();
                     let points = derive_coords_from_osm_pbf(&map, &cyclable_node_ids)?;
-
-                    // todo. calc distances and elevations together?
 
                     info!(
                         "Serializing {} units of data from memory to {:?}",
@@ -80,6 +79,9 @@ async fn main() -> Result<()> {
             }
         }
         SubCommand::Circuit { .. } => {
+            // retrieve the node graph, node to coords map and elevation.
+            // create directed graph with edges being elevation
+            // the algorithm.
             todo!()
         }
     }

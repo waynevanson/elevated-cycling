@@ -29,7 +29,7 @@
 
         rust' = fenix.packages.${system}.fromToolchainFile {
           file = ./rust-toolchain.toml;
-          sha256 = "sha256-txii9/4eh2fR+unoHKlPVcGphsHefEiNI+5wLPoCTpA=";
+          sha256 = "sha256-+9FmLhAOezBZCOziO0Qct1NOrfpjNsXxc/8I0c7BdKE=";
         };
 
         naersk' = pkgs.callPackage naersk {
@@ -42,18 +42,18 @@
           src = ./.;
           cargoClippyOptions = _: ["-A clippy::all"];
         };
+
         nativeBuildInputs = with pkgs; [
           cargo-watch
           cargo-tarpaulin
           clang
-          codebase'
           git
           llvmPackages.bintools
           openssl
           openssl.dev
           pkg-config
           rust'
-          rust-analyzer-nightly
+          rust-analyzer
           unrar
         ];
         buildInputs = with pkgs; [
@@ -62,6 +62,7 @@
           docker
           docker-compose
           unrar
+          rust'
         ];
 
         environment = {

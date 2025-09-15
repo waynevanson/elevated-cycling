@@ -25,7 +25,7 @@ pub fn derive_coords_from_osm_pbf(
         let mut map = HashMap::with_capacity(1);
         map.extend(
             element
-                // todo: filter for nodes first
+                // Could be a Node or DenseNode
                 .node_id_point()
                 .filter(|node_id| nodes.contains(&node_id.0)),
         );
