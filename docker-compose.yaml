@@ -1,0 +1,19 @@
+services:
+  postgis:
+    environment:
+      POSTGRES_PASSWORD: example
+    image: postgis/postgis:17-3.6-alpine
+    ports:
+      - 5432:5432
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./postgres.d:/entrypoint-initdb.d/
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8080:8080
+
+volumes:
+  database:

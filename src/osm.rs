@@ -12,6 +12,8 @@ use std::{
 
 const READ_BUF_CAPACITY: usize = 8usize.pow(8);
 
+// todo: edges should end up only conting the
+
 pub fn derive_coords_from_osm_pbf(
     path: &Path,
     nodes: &HashSet<i64>,
@@ -39,7 +41,7 @@ pub fn derive_coords_from_osm_pbf(
 
 /// Creates an undirected, unweighted graph from all ways in an Open Street Maps PBF.
 pub fn get_unweighted_cyclable_graphmap_from_elements(path: &Path) -> Result<UnGraphMap<i64, ()>> {
-    let pbf = ElementReader::with_capacity(READ_BUF_CAPACITY, path)?;
+    let pbf = ElementReader::from_path(path)?;
 
     let graph = pbf.par_map_reduce(
         get_cyclable_node_ids_from_element,

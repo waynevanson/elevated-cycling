@@ -3,3 +3,5 @@ target/
 .cached
 map.osm.pbf
 .cache.postcard
+db.redb
+/els

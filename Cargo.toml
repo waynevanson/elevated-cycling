@@ -29,3 +29,5 @@ geotiff = "0.1.0"
 tiff = "0.10.3"
 petgraph = { version = "0.8.2", features = ["serde"] }
 redb = "3.0.1"
+serde = { version = "1.0.224", features = ["derive"] }
+tokio-postgres = "0.7.13"

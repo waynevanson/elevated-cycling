@@ -1,47 +1,16 @@
-# Elevated Cycling API
+# Elevated Cycling (WIP)
 
 You provide a coordinate and a radius to search, and receive the sickest down hill circuit of your life.
 
-# Crates
-
-| Name        | Description                                                                          |
-| :---------- | :----------------------------------------------------------------------------------- |
-| `bootstrap` | Gets all the data we can buffered into memory, calling API's and saving to postgres. |
-| `server`    | Contains and API to be consumed and webpages.                                        |
-| `traits`    | Utility traits useful for this repository.                                           |
-
 # Usage
 
-Work in progress, this doesn't work very well.
+## Requirements
 
-- Still needs a webpage for [MapBBCode](http://mapbbcode.org/) to give.
-- An algorithm that isn't trash.
+1. `nix`
+2. `docker-compose`
 
-This should give you a circuit if you have 2 entry points to your street, otherwise it'll probably fail at the moment.
+## Install
 
-## Self Hosted
-
-Currenlty run as a dev environment with file watching servers because I don't plan to deploy this into the cloud
-(unless I want to lose all my money).
-
-1. Install and setup prerequisites
-   - docker ^24.1.7
-   - docker-compose ^2.23.3
-2. Clone repository locally.
-3. From the root of the repository, run the `docker-compose up`.
-4. Run the following command, subsituting values in the body with your parameters:
-
-Radius is in KM.
-
-```sh
-curl --request=GET --header='ContentType: application/json' http://localhost:3000/api/circuit/downhill \
---data='{ "longitude": 0.0, "latitude": 0.0, "radius": 0.5}'
-```
-
-# CDN
-
-The URL generated is a static webpage, meaning that you can use it however you like.
-
-<!-- TODO - Version control this file -->
-
-https://cdn.jsdelivr.net/gh/user/waynevanson/public/map
+1. Clone repository to local.
+2. Run `nix develop` to download dependencies.
+3. Dev.

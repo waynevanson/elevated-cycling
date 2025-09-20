@@ -6,20 +6,30 @@ use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use geo::{Coord, Intersects};
-use log::info;
+use itertools::Itertools;
+use log::{info, warn};
+use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
-    io::{BufReader, BufWriter, Read},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
 };
+
+// set up dev shell
 
 const READ_BUF_CAPACITY: usize = 8usize.pow(8);
 
 // maybe don't use paths and instead just push to stdout
-const DEFAULT_PATH_MAP_OSM_PBF: &str = "map.osm.pbf";
-const DEFAULT_PATH_COORDS: &str = ".coords.postcard";
-const DEFAULT_PATH_ELEVATIONS: &str = ".elevations.postcard";
+
+const TABLE_NODE_ID_COORDS: TableDefinition<i64, (f64, f64)> =
+    TableDefinition::new("node_id_coords");
+
+const TABLE_NODE_ID_ELEVATION: TableDefinition<i64, f64> =
+    TableDefinition::new("node_id_elevations");
+
+const TABLE_NODE_ID_EDGES_DIRECTED: TableDefinition<i64, i64> =
+    TableDefinition::new("node_id_neighbours");
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,35 +40,79 @@ async fn main() -> Result<()> {
         .try_init()?;
 
     match args.subcommand {
-        SubCommand::Extract(extract) => {
+        SubCommand::Bootstrap(extract) => {
             match extract {
-                // todo: reiterate for a graph
-                Extract::Coordinates { map, coords } => {
+                Extract::Ways { map } => {
                     let graph = get_unweighted_cyclable_graphmap_from_elements(&map)?;
+                    info!("Reading {:?} to create a graph of cycleable node", map);
+                }
+                // todo: reiterate for a graph
+                Extract::Coordinates { map } => {
+                    let db = Database::create("db.redb")?;
+
+                    info!("Writing to DB");
+                    let transaction = db.begin_write()?;
+                    {
+                        let mut table = transaction.open_table(TABLE_NODE_ID_EDGES_DIRECTED)?;
+
+                        for (key, value, _) in graph.all_edges() {
+                            table.insert(key, value)?;
+                        }
+                    };
+                    transaction.commit()?;
+                    info!("Written to DB");
 
                     let cyclable_node_ids = graph.nodes().collect::<HashSet<i64>>();
+
+                    info!("Reading {:?} to create all the coords", map);
                     let points = derive_coords_from_osm_pbf(&map, &cyclable_node_ids)?;
 
-                    info!(
-                        "Serializing {} units of data from memory to {:?}",
-                        points.len(),
-                        coords
-                    );
-                    // ~ 5 seconds
+                    info!("Writing to DB");
+                    let transaction = db.begin_write()?;
+                    {
+                        let mut table = transaction.open_table(TABLE_NODE_ID_COORDS)?;
 
-                    let out_file = BufWriter::new(File::create(&coords)?);
-
-                    postcard::to_io(&points, out_file)?;
-
-                    info!("Serialized to {:?}", coords)
+                        for (node_id, Coord { x, y }) in points {
+                            table.insert(node_id, (x, y))?;
+                        }
+                    };
+                    transaction.commit()?;
+                    info!("Written to DB");
                 }
-                Extract::Elevations {
-                    coords,
-                    tiffs,
-                    elevations,
-                } => {
-                    let mut coords = read_coords(coords)?;
-                    let mut all_elevations = HashMap::<i64, f64>::with_capacity(coords.len());
+                Extract::Elevations { tiffs } => {
+                    let db = Database::create("db.redb")?;
+
+                    let existing_elevations: HashSet<i64> = {
+                        let transaction = db.begin_read()?;
+                        let table = transaction.open_table(TABLE_NODE_ID_ELEVATION)?;
+                        table.iter()?.map_ok(|a| a.0.value()).try_collect()?
+                    };
+
+                    let mut coords = {
+                        info!("Reading coordinates form database");
+                        let transaction = db.begin_read()?;
+                        let table = transaction.open_table(TABLE_NODE_ID_COORDS)?;
+
+                        let coords = table
+                            .iter()?
+                            .map_ok(|value| {
+                                let node_id = value.0.value();
+                                let coord = Coord::from(value.1.value());
+                                (node_id, coord)
+                            })
+                            .filter_ok(|entry| !existing_elevations.contains(&entry.0))
+                            .fold_ok(
+                                HashMap::with_capacity(table.len()? as usize),
+                                |mut acc, (k, v)| {
+                                    acc.insert(k, v);
+                                    acc
+                                },
+                            )?;
+
+                        coords
+                    };
+
+                    info!("Read coordinates form database");
 
                     for tiff in tiffs {
                         let elevations = read_geotiff_to_elevations(&mut coords, tiff)?;
@@ -67,14 +121,24 @@ async fn main() -> Result<()> {
                             coords.remove(node_id);
                         }
 
-                        all_elevations.extend(elevations);
+                        let transaction = db.begin_write()?;
+
+                        {
+                            let mut table = transaction.open_table(TABLE_NODE_ID_ELEVATION)?;
+
+                            for (node_id, elevation) in elevations {
+                                table.insert(node_id, elevation)?;
+                            }
+                        };
+
+                        transaction.commit()?;
                     }
 
-                    let out_file = BufWriter::new(File::create(&elevations)?);
+                    if coords.len() > 0 {
+                        warn!("Still have {} coords remaining", coords.len());
+                    }
 
-                    postcard::to_io(&coords, out_file)?;
-
-                    info!("Serialized to {:?}", coords)
+                    info!("Badabing, badaboom!")
                 }
             }
         }
@@ -90,9 +154,11 @@ async fn main() -> Result<()> {
 }
 
 fn read_geotiff_to_elevations(
-    coords: &mut HashMap<i64, Coord>,
+    coords: &HashMap<i64, Coord>,
     tiff: PathBuf,
 ) -> Result<HashMap<i64, f64>> {
+    info!("Reading elevations from geotiff");
+
     let file_in = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(tiff)?);
 
     let geotiff = geotiff::GeoTiff::read(file_in)?;
@@ -109,26 +175,9 @@ fn read_geotiff_to_elevations(
         })
         .collect::<HashMap<i64, f64>>();
 
+    info!("Read elevations from geotiff");
+
     Ok(elevations)
-}
-
-fn read_coords(path: impl AsRef<Path>) -> Result<HashMap<i64, Coord>> {
-    info!("Reading and deserializing data from {:?}", path.as_ref());
-    // ~21 seconds
-
-    let mut buf = Vec::new();
-    let mut cache_file = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(&path)?);
-    cache_file.read_to_end(&mut buf)?;
-
-    let coords: HashMap<i64, Coord> = postcard::from_bytes(&buf)?;
-
-    info!(
-        "Deserialized a total of {} units into memory from {:?} ",
-        coords.len(),
-        path.as_ref()
-    );
-
-    Ok(coords)
 }
 
 #[derive(Debug, Parser, Clone)]
@@ -143,32 +192,23 @@ pub struct RawArgs {
 #[derive(Debug, Parser, Clone)]
 pub enum SubCommand {
     #[command(subcommand)]
-    /// Extracts only the data required from the `*.pbf` into a `.*.postcard` file
-    Extract(Extract),
-    Circuit {
-        #[arg(short, long, default_value = DEFAULT_PATH_COORDS)]
-        cache: PathBuf,
-    },
+    Bootstrap(Extract),
+    Circuit {},
 }
 
 // todo: both when there's no name and it's just extract
 #[derive(Debug, Parser, Clone)]
 pub enum Extract {
+    Ways {
+        #[arg(short, long)]
+        map: PathBuf,
+    },
     #[command(alias = "coords")]
     Coordinates {
-        #[arg(short, long, default_value = DEFAULT_PATH_MAP_OSM_PBF)]
+        #[arg(short, long)]
         map: PathBuf,
-
-        #[arg(short, long, default_value = DEFAULT_PATH_COORDS)]
-        coords: PathBuf,
     },
     Elevations {
-        #[arg(short, long, default_value = DEFAULT_PATH_COORDS)]
-        coords: PathBuf,
-
-        #[arg(short, long, default_value = DEFAULT_PATH_ELEVATIONS)]
-        elevations: PathBuf,
-
         tiffs: Vec<PathBuf>,
     },
 }
