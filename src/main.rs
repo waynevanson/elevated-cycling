@@ -12,12 +12,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{collections::HashMap, fs::File, io::BufReader, path::PathBuf};
 use tokio::runtime::Builder;
 
-async fn insert_ways(
-    pool: &PgPool,
-    nodes: Vec<i64>,
-    source_node_ids: Vec<i64>,
-    target_node_ids: Vec<i64>,
-) -> Result<()> {
+async fn insert_node_ids(pool: &PgPool, nodes: Vec<i64>) -> Result<()> {
     info!("Inserting nodes");
     let updated = sqlx::query(
         r#"INSERT INTO osm_node(id) SELECT * FROM UNNEST($1::bigint[]) ON CONFLICT DO NOTHING"#,
@@ -29,7 +24,14 @@ async fn insert_ways(
 
     info!("Inserted {} nodes", updated);
 
+    Ok(())
+}
+
+async fn insert_edge_ids(pool: &PgPool, edges_unzipped: (Vec<i64>, Vec<i64>)) -> Result<()> {
+    let (source_node_ids, target_node_ids) = edges_unzipped;
+
     info!("Inserting edges");
+
     let updated = sqlx::query(
     r#"INSERT INTO osm_node_edge(source_node_id,target_node_id) SELECT * FROM UNNEST($1::bigint[], $2::bigint[]) ON CONFLICT DO NOTHING"#
     )
@@ -40,6 +42,17 @@ async fn insert_ways(
     .rows_affected();
 
     info!("Inserted {} edges", updated);
+
+    Ok(())
+}
+
+async fn insert_ways(
+    pool: &PgPool,
+    nodes: Vec<i64>,
+    edges_unzipped: (Vec<i64>, Vec<i64>),
+) -> Result<()> {
+    insert_node_ids(pool, nodes).await?;
+    insert_edge_ids(pool, edges_unzipped).await?;
 
     Ok(())
 }
@@ -75,12 +88,12 @@ fn main() -> Result<()> {
                     info!("Building graph");
                     let graph = get_unweighted_cyclable_graphmap_from_elements(&map)?;
                     let nodes = graph.nodes().collect_vec();
-                    let (source_node_ids, target_node_ids): (Vec<_>, Vec<_>) =
+                    let edges_unzipped: (Vec<_>, Vec<_>) =
                         graph.all_edges().map(|(a, b, _)| (a, b)).unzip();
 
                     info!("Graph ready");
 
-                    insert_ways(&pool, nodes, source_node_ids, target_node_ids).await?;
+                    insert_ways(&pool, nodes, edges_unzipped).await?;
                 }
                 _ => {
                     todo!()
