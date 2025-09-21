@@ -1,156 +1,98 @@
 mod osm;
-mod traits;
 
-use crate::osm::{derive_coords_from_osm_pbf, get_unweighted_cyclable_graphmap_from_elements};
+use crate::osm::get_unweighted_cyclable_graphmap_from_elements;
 use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use geo::{Coord, Intersects};
 use itertools::Itertools;
-use log::{info, warn};
-use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::{BufReader, Read},
-    path::{Path, PathBuf},
-};
+use log::{debug, info};
+use rayon::ThreadPoolBuilder;
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::{collections::HashMap, fs::File, io::BufReader, path::PathBuf};
+use tokio::runtime::Builder;
+
+async fn insert_ways(
+    pool: &PgPool,
+    nodes: Vec<i64>,
+    source_node_ids: Vec<i64>,
+    target_node_ids: Vec<i64>,
+) -> Result<()> {
+    info!("Inserting nodes");
+    let updated = sqlx::query(
+        r#"INSERT INTO osm_node(id) SELECT * FROM UNNEST($1::bigint[]) ON CONFLICT DO NOTHING"#,
+    )
+    .bind(nodes)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    info!("Inserted {} nodes", updated);
+
+    info!("Inserting edges");
+    let updated = sqlx::query(
+    r#"INSERT INTO osm_node_edge(source_node_id,target_node_id) SELECT * FROM UNNEST($1::bigint[], $2::bigint[]) ON CONFLICT DO NOTHING"#
+    )
+    .bind(source_node_ids)
+    .bind(target_node_ids)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    info!("Inserted {} edges", updated);
+
+    Ok(())
+}
 
 // set up dev shell
 
-const READ_BUF_CAPACITY: usize = 8usize.pow(8);
-
-// maybe don't use paths and instead just push to stdout
-
-const TABLE_NODE_ID_COORDS: TableDefinition<i64, (f64, f64)> =
-    TableDefinition::new("node_id_coords");
-
-const TABLE_NODE_ID_ELEVATION: TableDefinition<i64, f64> =
-    TableDefinition::new("node_id_elevations");
-
-const TABLE_NODE_ID_EDGES_DIRECTED: TableDefinition<i64, i64> =
-    TableDefinition::new("node_id_neighbours");
-
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = RawArgs::try_parse()?;
 
     env_logger::Builder::new()
         .filter_level(args.verbose.log_level_filter())
         .try_init()?;
 
-    match args.subcommand {
-        SubCommand::Bootstrap(extract) => {
-            match extract {
+    ThreadPoolBuilder::new().num_threads(3).build_global()?;
+
+    let runtime = Builder::new_multi_thread()
+        .enable_all()
+        .max_blocking_threads(3)
+        .build()?;
+
+    runtime.block_on(async {
+        debug!("Connecting pool");
+
+        let pool = PgPoolOptions::new()
+            .connect("postgres://postgres:example@127.0.0.1:5432")
+            .await?;
+
+        debug!("Pool connected");
+
+        match args.subcommand {
+            SubCommand::Bootstrap(extract) => match extract {
                 Extract::Ways { map } => {
+                    info!("Building graph");
                     let graph = get_unweighted_cyclable_graphmap_from_elements(&map)?;
-                    info!("Reading {:?} to create a graph of cycleable node", map);
+                    let nodes = graph.nodes().collect_vec();
+                    let (source_node_ids, target_node_ids): (Vec<_>, Vec<_>) =
+                        graph.all_edges().map(|(a, b, _)| (a, b)).unzip();
+
+                    info!("Graph ready");
+
+                    insert_ways(&pool, nodes, source_node_ids, target_node_ids).await?;
                 }
-                // todo: reiterate for a graph
-                Extract::Coordinates { map } => {
-                    let db = Database::create("db.redb")?;
-
-                    info!("Writing to DB");
-                    let transaction = db.begin_write()?;
-                    {
-                        let mut table = transaction.open_table(TABLE_NODE_ID_EDGES_DIRECTED)?;
-
-                        for (key, value, _) in graph.all_edges() {
-                            table.insert(key, value)?;
-                        }
-                    };
-                    transaction.commit()?;
-                    info!("Written to DB");
-
-                    let cyclable_node_ids = graph.nodes().collect::<HashSet<i64>>();
-
-                    info!("Reading {:?} to create all the coords", map);
-                    let points = derive_coords_from_osm_pbf(&map, &cyclable_node_ids)?;
-
-                    info!("Writing to DB");
-                    let transaction = db.begin_write()?;
-                    {
-                        let mut table = transaction.open_table(TABLE_NODE_ID_COORDS)?;
-
-                        for (node_id, Coord { x, y }) in points {
-                            table.insert(node_id, (x, y))?;
-                        }
-                    };
-                    transaction.commit()?;
-                    info!("Written to DB");
+                _ => {
+                    todo!()
                 }
-                Extract::Elevations { tiffs } => {
-                    let db = Database::create("db.redb")?;
-
-                    let existing_elevations: HashSet<i64> = {
-                        let transaction = db.begin_read()?;
-                        let table = transaction.open_table(TABLE_NODE_ID_ELEVATION)?;
-                        table.iter()?.map_ok(|a| a.0.value()).try_collect()?
-                    };
-
-                    let mut coords = {
-                        info!("Reading coordinates form database");
-                        let transaction = db.begin_read()?;
-                        let table = transaction.open_table(TABLE_NODE_ID_COORDS)?;
-
-                        let coords = table
-                            .iter()?
-                            .map_ok(|value| {
-                                let node_id = value.0.value();
-                                let coord = Coord::from(value.1.value());
-                                (node_id, coord)
-                            })
-                            .filter_ok(|entry| !existing_elevations.contains(&entry.0))
-                            .fold_ok(
-                                HashMap::with_capacity(table.len()? as usize),
-                                |mut acc, (k, v)| {
-                                    acc.insert(k, v);
-                                    acc
-                                },
-                            )?;
-
-                        coords
-                    };
-
-                    info!("Read coordinates form database");
-
-                    for tiff in tiffs {
-                        let elevations = read_geotiff_to_elevations(&mut coords, tiff)?;
-
-                        for node_id in elevations.keys() {
-                            coords.remove(node_id);
-                        }
-
-                        let transaction = db.begin_write()?;
-
-                        {
-                            let mut table = transaction.open_table(TABLE_NODE_ID_ELEVATION)?;
-
-                            for (node_id, elevation) in elevations {
-                                table.insert(node_id, elevation)?;
-                            }
-                        };
-
-                        transaction.commit()?;
-                    }
-
-                    if coords.len() > 0 {
-                        warn!("Still have {} coords remaining", coords.len());
-                    }
-
-                    info!("Badabing, badaboom!")
-                }
+            },
+            _ => {
+                todo!()
             }
         }
-        SubCommand::Circuit { .. } => {
-            // retrieve the node graph, node to coords map and elevation.
-            // create directed graph with edges being elevation
-            // the algorithm.
-            todo!()
-        }
-    }
 
-    return Ok(());
+        return Ok(());
+    })
 }
 
 fn read_geotiff_to_elevations(
@@ -159,7 +101,7 @@ fn read_geotiff_to_elevations(
 ) -> Result<HashMap<i64, f64>> {
     info!("Reading elevations from geotiff");
 
-    let file_in = BufReader::with_capacity(READ_BUF_CAPACITY, File::open(tiff)?);
+    let file_in = BufReader::new(File::open(tiff)?);
 
     let geotiff = geotiff::GeoTiff::read(file_in)?;
 

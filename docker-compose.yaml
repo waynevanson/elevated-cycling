@@ -5,6 +5,7 @@ services:
     image: postgis/postgis:17-3.6-alpine
     ports:
       - 5432:5432
+    restart: always
     volumes:
       - database:/var/lib/postgresql/data
       - ./postgres.d:/entrypoint-initdb.d/

@@ -1,14 +1,14 @@
 -- Nullable fields for storing other data
 CREATE TABLE osm_node (
     -- node_id for nodes in `*.osm[.pbf]` maps.
-    id INTEGER PRIMARY KEY,
+    id BIGINT PRIMARY KEY,
     coord GEOMETRY(POINT, 4326) UNIQUE,
     elevation INTEGER
 );
 
 CREATE TABLE osm_node_edge (
-    source_node_id INTEGER NOT NULL REFERENCES osm_node(id),
-    target_node_id INTEGER NOT NULL REFERENCES osm_node(id),
+    source_node_id BIGINT NOT NULL REFERENCES osm_node(id),
+    target_node_id BIGINT NOT NULL REFERENCES osm_node(id),
     PRIMARY KEY (source_node_id, target_node_id)
 );
 

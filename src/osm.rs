@@ -1,51 +1,18 @@
-use crate::traits::{ElementReaderExt, IntoNodeIdPoint, ParMapCollect};
 use anyhow::Result;
-use geo::Coord;
 use itertools::Itertools;
-use log::debug;
 use osmpbf::{reader::ElementReader, Element, TagIter};
-use petgraph::prelude::UnGraphMap;
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-};
-
-const READ_BUF_CAPACITY: usize = 8usize.pow(8);
-
-// todo: edges should end up only conting the
-
-pub fn derive_coords_from_osm_pbf(
-    path: &Path,
-    nodes: &HashSet<i64>,
-) -> Result<HashMap<i64, Coord>> {
-    let pbf = ElementReader::with_capacity(READ_BUF_CAPACITY, path)?;
-
-    debug!("Extracting data from {:?} into memory", path);
-    // ~31 seconds
-
-    let coords = pbf.par_map_collect(|element| {
-        let mut map = HashMap::with_capacity(1);
-        map.extend(
-            element
-                // Could be a Node or DenseNode
-                .node_id_point()
-                .filter(|node_id| nodes.contains(&node_id.0)),
-        );
-        map
-    });
-
-    debug!("Extracted data from {:?} into memory", path);
-
-    Ok(coords)
-}
+use petgraph::prelude::{GraphMap, UnGraphMap};
+use std::{fs::File, io::BufReader, path::Path};
 
 /// Creates an undirected, unweighted graph from all ways in an Open Street Maps PBF.
 pub fn get_unweighted_cyclable_graphmap_from_elements(path: &Path) -> Result<UnGraphMap<i64, ()>> {
-    let pbf = ElementReader::from_path(path)?;
+    let pbf = ElementReader::new(BufReader::with_capacity(1024 * 1024, File::open(path)?));
 
+    // Bulk inserts
+    // https://github.com/launchbadge/sqlx/blob/main/FAQ.md#how-can-i-bind-an-array-to-a-values-clause-how-can-i-do-bulk-inserts
     let graph = pbf.par_map_reduce(
         get_cyclable_node_ids_from_element,
-        || UnGraphMap::default(),
+        || GraphMap::default(),
         |mut accu, curr| {
             accu.extend(curr.all_edges());
             accu
@@ -65,8 +32,7 @@ fn get_cyclable_node_ids_from_element(element: Element<'_>) -> UnGraphMap<i64, (
     .map(|way| {
         way.refs()
             .tuple_windows::<(_, _)>()
-            .map(|(from, to)| (from, to, ()))
-            .collect::<UnGraphMap<_, _>>()
+            .collect::<UnGraphMap<i64, ()>>()
     })
     .unwrap_or_default()
 }
