@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
                 }
             }
         },
-        _ => {
+        SubCommand::Circuit { radius, x, y } => {
             todo!()
         }
     }
@@ -276,7 +276,15 @@ pub struct RawArgs {
 pub enum SubCommand {
     #[command(subcommand)]
     Bootstrap(Extract),
-    Circuit {},
+    Circuit {
+        /// Kilometres
+        #[arg(short, long, default_value_t = 10.0)]
+        radius: f64,
+
+        x: f64,
+
+        y: f64,
+    },
 }
 
 // todo: both when there's no name and it's just extract
