@@ -1,10 +1,10 @@
 mod osm;
 
 use crate::osm::{get_unweighted_cyclable_graphmap_from_elements, read_to_nodes_coord};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
-use geo::{Coord, Intersects};
+use geo::Coord;
 use itertools::Itertools;
 use log::{debug, info};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -12,9 +12,8 @@ use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::BufReader,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
-use tokio::runtime::Builder;
 
 async fn insert_node_ids(pool: &PgPool, nodes: Vec<i64>) -> Result<()> {
     info!("Inserting nodes");
@@ -68,7 +67,8 @@ async fn insert_ways(
     Ok(())
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = RawArgs::try_parse()?;
 
     env_logger::Builder::new()
@@ -77,82 +77,163 @@ fn main() -> Result<()> {
 
     // ThreadPoolBuilder::new().num_threads(3).build_global()?;
 
-    let runtime = Builder::new_multi_thread()
-        .enable_all()
-        // .max_blocking_threads(3)
-        .build()?;
+    debug!("Connecting pool");
 
-    runtime.block_on(async {
-        debug!("Connecting pool");
+    let pool = PgPoolOptions::new()
+        .connect("postgres://postgres:example@127.0.0.1:5432")
+        .await?;
 
-        let pool = PgPoolOptions::new()
-            .connect("postgres://postgres:example@127.0.0.1:5432")
-            .await?;
+    debug!("Pool connected");
 
-        debug!("Pool connected");
+    match args.subcommand {
+        SubCommand::Bootstrap(extract) => match extract {
+            Extract::Ways { map } => {
+                info!("Building graph");
+                let graph = get_unweighted_cyclable_graphmap_from_elements(&map)?;
+                let nodes = graph.nodes().collect_vec();
+                let edges_unzipped: (Vec<_>, Vec<_>) =
+                    graph.all_edges().map(|(a, b, _)| (a, b)).unzip();
 
-        match args.subcommand {
-            SubCommand::Bootstrap(extract) => match extract {
-                Extract::Ways { map } => {
-                    info!("Building graph");
-                    let graph = get_unweighted_cyclable_graphmap_from_elements(&map)?;
-                    let nodes = graph.nodes().collect_vec();
-                    let edges_unzipped: (Vec<_>, Vec<_>) =
-                        graph.all_edges().map(|(a, b, _)| (a, b)).unzip();
+                info!("Graph ready");
 
-                    info!("Graph ready");
+                insert_ways(&pool, nodes, edges_unzipped).await?;
+            }
+            Extract::Coordinates { map } => {
+                info!("Reading all nodes from {:?}", map);
 
-                    insert_ways(&pool, nodes, edges_unzipped).await?;
-                }
-                Extract::Coordinates { map } => {
-                    info!("Reading all nodes from {:?}", map);
+                let cycleable_node_ids = query_node_ids(&pool).await?;
 
-                    let cycleable_node_ids = query_node_ids(&pool).await?;
+                info!("Reading nodes");
+                let map =
+                    read_to_nodes_coord(&map, |node_id| cycleable_node_ids.contains(node_id))?;
+                info!("Read nodes");
 
-                    info!("Reading nodes");
-                    let map = read_to_nodes_coord(&map,|node_id| cycleable_node_ids.contains(node_id))?;
-                    info!("Read nodes");
+                // only keep node_ids we can cycle, which we updated in our database earlier.
 
-                    // only keep node_ids we can cycle, which we updated in our database earlier.
+                let (node_ids, xs, ys): (Vec<i64>, Vec<f64>, Vec<f64>) = map
+                    .into_iter()
+                    .map(|(node_id, coord)| (node_id, coord.x, coord.y))
+                    .multiunzip();
 
-                    let (node_ids, xs, ys): (Vec<i64>, Vec<f64>,Vec<f64>) = map
-                        .into_iter()
-                        .map(|(node_id,coord)|(node_id,coord.x,coord.y))
-                        .multiunzip();
+                info!("Inserting {} coords", node_ids.len());
 
-                    info!("Inserting {} coords", node_ids.len());
-
-                    let query = r#"
+                let query = r#"
                         UPDATE osm_node AS t
                         SET coord = ST_SetSRID(ST_Point(lon, lat), 4326)
                         FROM UNNEST($1::bigint[], $2::double precision[], $3::double precision[]) AS params(id, lon, lat)
                         WHERE t.id = params.id
                     "#;
 
-                    let updated = sqlx::query(query)
-                        .bind(node_ids)
-                        .bind(xs)
-                        .bind(ys)
-                        .execute(&pool)
-                        .await?
-                        .rows_affected();
+                let updated = sqlx::query(query)
+                    .bind(node_ids)
+                    .bind(xs)
+                    .bind(ys)
+                    .execute(&pool)
+                    .await?
+                    .rows_affected();
 
-                    info!("Inserted {} coordinates", updated);
-                }
-                Extract::Elevations { tiffs } => {
-
-                    // for tiff in &tiffs {
-                    //     let map = read_geotiff_to_elevations(coords, tiff);
-                    // }
-                }
-            },
-            _ => {
-                todo!()
+                info!("Inserted {} coordinates", updated);
             }
+            Extract::Elevations { tiffs } => {
+                // read a tiff, get bounding rect, query for containing nodes, get elevations
+                for tiff in &tiffs {
+                    read_and_update_elevations(&pool, tiff).await?;
+                }
+            }
+        },
+        _ => {
+            todo!()
         }
+    }
 
+    return Ok(());
+}
+
+async fn read_and_update_elevations(pool: &PgPool, tiff: &Path) -> Result<()> {
+    info!("Reading elevations from {:?}", tiff);
+
+    let file_in = BufReader::new(File::open(tiff)?);
+    let geotiff = geotiff::GeoTiff::read(file_in)?;
+
+    let rect = geotiff.model_extent();
+
+    info!("Querying containing coords");
+    let query = r#"
+                        SELECT id, ST_X(coord) as x, ST_Y(coord) as Y FROM osm_node
+                        WHERE elevation IS NULL AND coord IS NOT NULL
+                        AND ST_Within(coord, ST_MakeEnvelope($1, $2, $3, $4, 4326))
+                    "#;
+
+    let min = rect.min();
+    let max = rect.max();
+    let rows: HashMap<i64, Coord> = sqlx::query(query)
+        .bind(min.x)
+        .bind(min.y)
+        .bind(max.x)
+        .bind(max.y)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|row| -> Result<(i64, Coord)> {
+            let id: i64 = row.try_get("id")?;
+            let x: f64 = row.try_get("x")?;
+            let y: f64 = row.try_get("y")?;
+            let coord = Coord { x, y };
+            Ok((id, coord))
+        })
+        .try_collect()?;
+
+    let size = rows.len();
+    info!("Queried {} containing coords", size);
+
+    if size <= 0 {
+        info!("No coordinates, skipping");
         return Ok(());
-    })
+    }
+
+    let (node_ids, elevations): (Vec<i64>, Vec<f64>) = rows
+        .into_iter()
+        .map(|(node_id, coord)| -> Result<(i64, f64)> {
+            Ok((
+                node_id,
+                geotiff
+                    .get_value_at::<f64>(&coord, 0)
+                    .ok_or_else(|| anyhow!("Expected to find value at {:?}", coord))?,
+            ))
+        })
+        // try_fold might be okay here but cbf learning
+        .fold(
+            Ok((Vec::with_capacity(size), Vec::with_capacity(size))),
+            |accu, curr| match (accu, curr) {
+                (Ok(mut accu), Ok(curr)) => {
+                    accu.0.push(curr.0);
+                    accu.1.push(curr.1);
+                    Ok(accu)
+                }
+                (Err(error), _) => Err(error),
+                (_, Err(error)) => Err(error),
+            },
+        )?;
+
+    info!("Updating elevations");
+    let query = r#"
+        UPDATE osm_node as t
+        SET elevation = el
+        FROM UNNEST($1::bigint[], $2::double precision[])
+        AS params(id, el)
+        WHERE t.id = params.id
+    "#;
+
+    let updated = sqlx::query(query)
+        .bind(node_ids)
+        .bind(elevations)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+    info!("Updated {} elevations", updated);
+
+    Ok(())
 }
 
 async fn query_node_ids(pool: &PgPool) -> Result<HashSet<i64>> {
@@ -168,33 +249,6 @@ async fn query_node_ids(pool: &PgPool) -> Result<HashSet<i64>> {
     info!("Queried {} cyclable nodes", cycleable_node_ids.len());
 
     Ok(cycleable_node_ids)
-}
-
-fn read_geotiff_to_elevations(
-    coords: &HashMap<i64, Coord>,
-    tiff: PathBuf,
-) -> Result<HashMap<i64, f64>> {
-    info!("Reading elevations from geotiff");
-
-    let file_in = BufReader::new(File::open(tiff)?);
-
-    let geotiff = geotiff::GeoTiff::read(file_in)?;
-
-    let rect = geotiff.model_extent();
-
-    let elevations = coords
-        .iter()
-        .filter(|(_, coord)| rect.intersects(*coord))
-        .filter_map(|(node_id, coord)| {
-            geotiff
-                .get_value_at::<f64>(&coord, 1)
-                .map(|elevation| (*node_id, elevation))
-        })
-        .collect::<HashMap<i64, f64>>();
-
-    info!("Read elevations from geotiff");
-
-    Ok(elevations)
 }
 
 #[derive(Debug, Parser, Clone)]
