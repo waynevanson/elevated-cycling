@@ -62,7 +62,6 @@
           docker
           docker-compose
           unrar
-          rust'
         ];
 
         environment = {

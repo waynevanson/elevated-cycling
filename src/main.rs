@@ -1,26 +1,34 @@
 mod osm;
 
-use crate::osm::get_unweighted_cyclable_graphmap_from_elements;
+use crate::osm::{get_unweighted_cyclable_graphmap_from_elements, read_to_nodes_coord};
 use anyhow::Result;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use geo::{Coord, Intersects};
 use itertools::Itertools;
 use log::{debug, info};
-use rayon::ThreadPoolBuilder;
-use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::{collections::HashMap, fs::File, io::BufReader, path::PathBuf};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::BufReader,
+    path::PathBuf,
+};
 use tokio::runtime::Builder;
 
 async fn insert_node_ids(pool: &PgPool, nodes: Vec<i64>) -> Result<()> {
     info!("Inserting nodes");
-    let updated = sqlx::query(
-        r#"INSERT INTO osm_node(id) SELECT * FROM UNNEST($1::bigint[]) ON CONFLICT DO NOTHING"#,
-    )
-    .bind(nodes)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let query = r#"
+        INSERT INTO osm_node(id)
+        SELECT * FROM UNNEST($1::bigint[])
+        ON CONFLICT DO NOTHING
+    "#;
+
+    let updated = sqlx::query(query)
+        .bind(nodes)
+        .execute(pool)
+        .await?
+        .rows_affected();
 
     info!("Inserted {} nodes", updated);
 
@@ -32,14 +40,18 @@ async fn insert_edge_ids(pool: &PgPool, edges_unzipped: (Vec<i64>, Vec<i64>)) ->
 
     info!("Inserting edges");
 
-    let updated = sqlx::query(
-    r#"INSERT INTO osm_node_edge(source_node_id,target_node_id) SELECT * FROM UNNEST($1::bigint[], $2::bigint[]) ON CONFLICT DO NOTHING"#
-    )
-    .bind(source_node_ids)
-    .bind(target_node_ids)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let query = r#"
+        INSERT INTO osm_node_edge(source_node_id,target_node_id)
+        SELECT * FROM UNNEST($1::bigint[], $2::bigint[])
+        ON CONFLICT DO NOTHING
+    "#;
+
+    let updated = sqlx::query(query)
+        .bind(source_node_ids)
+        .bind(target_node_ids)
+        .execute(pool)
+        .await?
+        .rows_affected();
 
     info!("Inserted {} edges", updated);
 
@@ -53,11 +65,8 @@ async fn insert_ways(
 ) -> Result<()> {
     insert_node_ids(pool, nodes).await?;
     insert_edge_ids(pool, edges_unzipped).await?;
-
     Ok(())
 }
-
-// set up dev shell
 
 fn main() -> Result<()> {
     let args = RawArgs::try_parse()?;
@@ -66,11 +75,11 @@ fn main() -> Result<()> {
         .filter_level(args.verbose.log_level_filter())
         .try_init()?;
 
-    ThreadPoolBuilder::new().num_threads(3).build_global()?;
+    // ThreadPoolBuilder::new().num_threads(3).build_global()?;
 
     let runtime = Builder::new_multi_thread()
         .enable_all()
-        .max_blocking_threads(3)
+        // .max_blocking_threads(3)
         .build()?;
 
     runtime.block_on(async {
@@ -94,6 +103,50 @@ fn main() -> Result<()> {
                     info!("Graph ready");
 
                     insert_ways(&pool, nodes, edges_unzipped).await?;
+                }
+                Extract::Coordinates { map } => {
+                    info!("Reading all nodes from {:?}", map);
+
+                    info!("Querying cyclable nodes");
+                    let cycleable_node_ids: HashSet<i64> =
+                        sqlx::query(r#"SELECT id FROM osm_node WHERE coord IS NULL"#)
+                            .fetch_all(&pool)
+                            .await?
+                            .iter()
+                            .map(|row| row.try_get::<i64, &str>("id"))
+                            .try_collect()?;
+
+                    info!("Queried {} cyclable nodes", cycleable_node_ids.len());
+
+                    info!("Reading nodes");
+                    let map = read_to_nodes_coord(&map,|node_id|cycleable_node_ids.contains(node_id))?;
+                    info!("Read nodes");
+
+                    // only keep node_ids we can cycle, which we updated in our database earlier.
+
+                    let (node_ids, xs, ys): (Vec<i64>, Vec<f64>,Vec<f64>) = map
+                        .into_iter()
+                        .map(|(node_id,coord)|(node_id,coord.x,coord.y))
+                        .multiunzip();
+
+                    info!("Inserting {} coords", node_ids.len());
+
+                    let query = r#"
+                        INSERT INTO osm_node(id, coord)
+                        SELECT id, ST_SetSRID(ST_Point(lon, lat), 4326)
+                        FROM UNNEST($1::bigint[], $2::double precision[], $3::double precision[]) AS params(id, lon, lat)
+                        ON CONFLICT DO NOTHING
+                    "#;
+
+                    let updated = sqlx::query(query)
+                        .bind(node_ids)
+                        .bind(xs)
+                        .bind(ys)
+                        .execute(&pool)
+                        .await?
+                        .rows_affected();
+
+                    info!("Inserted {} coordinates", updated);
                 }
                 _ => {
                     todo!()

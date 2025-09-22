@@ -3,7 +3,7 @@ CREATE TABLE osm_node (
     -- node_id for nodes in `*.osm[.pbf]` maps.
     id BIGINT PRIMARY KEY,
     coord GEOMETRY(POINT, 4326) UNIQUE,
-    elevation INTEGER
+    elevation DOUBLE PRECISION
 );
 
 CREATE TABLE osm_node_edge (

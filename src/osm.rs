@@ -1,8 +1,9 @@
 use anyhow::Result;
+use geo::Coord;
 use itertools::Itertools;
 use osmpbf::{reader::ElementReader, Element, TagIter};
 use petgraph::prelude::{GraphMap, UnGraphMap};
-use std::{fs::File, io::BufReader, path::Path};
+use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
 /// Creates an undirected, unweighted graph from all ways in an Open Street Maps PBF.
 pub fn get_unweighted_cyclable_graphmap_from_elements(path: &Path) -> Result<UnGraphMap<i64, ()>> {
@@ -86,4 +87,37 @@ fn cyclable_way(pair: (&str, &str)) -> bool {
         ) | ("cycleway", _)
             | ("bicycle_road", "yes")
     )
+}
+
+pub fn read_to_nodes_coord(
+    path: &Path,
+    node_predicate: impl Fn(&i64) -> bool + Sync,
+) -> Result<HashMap<i64, Coord>> {
+    let pbf = ElementReader::new(BufReader::with_capacity(1024 * 1024, File::open(path)?));
+
+    let hashmap = pbf.par_map_reduce(
+        |element| {
+            match element {
+                Element::Node(node) => Some((node.id(), Coord::from((node.lon(), node.lat())))),
+                Element::DenseNode(node) => {
+                    Some((node.id(), Coord::from((node.lon(), node.lat()))))
+                }
+                _ => None,
+            }
+            .filter(|(node_id, _)| node_predicate(node_id))
+            .map(|(node_id, coord)| {
+                let mut hashmap = HashMap::with_capacity(1);
+                hashmap.insert(node_id, coord);
+                hashmap
+            })
+            .unwrap_or_default()
+        },
+        || HashMap::default(),
+        |mut accu, curr| {
+            accu.extend(curr);
+            accu
+        },
+    )?;
+
+    Ok(hashmap)
 }
