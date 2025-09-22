@@ -107,19 +107,10 @@ fn main() -> Result<()> {
                 Extract::Coordinates { map } => {
                     info!("Reading all nodes from {:?}", map);
 
-                    info!("Querying cyclable nodes");
-                    let cycleable_node_ids: HashSet<i64> =
-                        sqlx::query(r#"SELECT id FROM osm_node WHERE coord IS NULL"#)
-                            .fetch_all(&pool)
-                            .await?
-                            .iter()
-                            .map(|row| row.try_get::<i64, &str>("id"))
-                            .try_collect()?;
-
-                    info!("Queried {} cyclable nodes", cycleable_node_ids.len());
+                    let cycleable_node_ids = query_node_ids(&pool).await?;
 
                     info!("Reading nodes");
-                    let map = read_to_nodes_coord(&map,|node_id|cycleable_node_ids.contains(node_id))?;
+                    let map = read_to_nodes_coord(&map,|node_id| cycleable_node_ids.contains(node_id))?;
                     info!("Read nodes");
 
                     // only keep node_ids we can cycle, which we updated in our database earlier.
@@ -132,10 +123,10 @@ fn main() -> Result<()> {
                     info!("Inserting {} coords", node_ids.len());
 
                     let query = r#"
-                        INSERT INTO osm_node(id, coord)
-                        SELECT id, ST_SetSRID(ST_Point(lon, lat), 4326)
+                        UPDATE osm_node AS t
+                        SET coord = ST_SetSRID(ST_Point(lon, lat), 4326)
                         FROM UNNEST($1::bigint[], $2::double precision[], $3::double precision[]) AS params(id, lon, lat)
-                        ON CONFLICT DO NOTHING
+                        WHERE t.id = params.id
                     "#;
 
                     let updated = sqlx::query(query)
@@ -148,8 +139,11 @@ fn main() -> Result<()> {
 
                     info!("Inserted {} coordinates", updated);
                 }
-                _ => {
-                    todo!()
+                Extract::Elevations { tiffs } => {
+
+                    // for tiff in &tiffs {
+                    //     let map = read_geotiff_to_elevations(coords, tiff);
+                    // }
                 }
             },
             _ => {
@@ -159,6 +153,21 @@ fn main() -> Result<()> {
 
         return Ok(());
     })
+}
+
+async fn query_node_ids(pool: &PgPool) -> Result<HashSet<i64>> {
+    info!("Querying cyclable nodes");
+    let cycleable_node_ids: HashSet<i64> =
+        sqlx::query(r#"SELECT id FROM osm_node WHERE coord IS NULL"#)
+            .fetch_all(pool)
+            .await?
+            .iter()
+            .map(|row| row.try_get::<i64, &str>("id"))
+            .try_collect()?;
+
+    info!("Queried {} cyclable nodes", cycleable_node_ids.len());
+
+    Ok(cycleable_node_ids)
 }
 
 fn read_geotiff_to_elevations(
