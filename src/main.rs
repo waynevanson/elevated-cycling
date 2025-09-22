@@ -4,7 +4,7 @@ use crate::osm::{get_unweighted_cyclable_graphmap_from_elements, read_to_nodes_c
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
-use geo::Coord;
+use geo::{Coord, Rect};
 use itertools::Itertools;
 use log::{debug, info};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -137,7 +137,27 @@ async fn main() -> Result<()> {
             Extract::Elevations { tiffs } => {
                 // read a tiff, get bounding rect, query for containing nodes, get elevations
                 for tiff in &tiffs {
-                    read_and_update_elevations(&pool, tiff).await?;
+                    info!("Reading elevations from {:?}", tiff);
+
+                    let file_in = BufReader::new(File::open(tiff)?);
+                    let geotiff = geotiff::GeoTiff::read(file_in)?;
+
+                    let rect = geotiff.model_extent();
+
+                    let rows = query_containing_coords(&pool, rect).await?;
+
+                    if rows.len() == 0 {
+                        info!("No coordinates, skipping");
+                        return Ok(());
+                    }
+
+                    let find_elevation = |coord: &Coord| {
+                        geotiff
+                            .get_value_at::<f64>(&coord, 0)
+                            .ok_or_else(|| anyhow!("Expected to find value at {:?}", coord))
+                    };
+
+                    update_elevations(&pool, rows, find_elevation).await?;
                 }
             }
         },
@@ -149,57 +169,17 @@ async fn main() -> Result<()> {
     return Ok(());
 }
 
-async fn read_and_update_elevations(pool: &PgPool, tiff: &Path) -> Result<()> {
-    info!("Reading elevations from {:?}", tiff);
-
-    let file_in = BufReader::new(File::open(tiff)?);
-    let geotiff = geotiff::GeoTiff::read(file_in)?;
-
-    let rect = geotiff.model_extent();
-
-    info!("Querying containing coords");
-    let query = r#"
-                        SELECT id, ST_X(coord) as x, ST_Y(coord) as Y FROM osm_node
-                        WHERE elevation IS NULL AND coord IS NOT NULL
-                        AND ST_Within(coord, ST_MakeEnvelope($1, $2, $3, $4, 4326))
-                    "#;
-
-    let min = rect.min();
-    let max = rect.max();
-    let rows: HashMap<i64, Coord> = sqlx::query(query)
-        .bind(min.x)
-        .bind(min.y)
-        .bind(max.x)
-        .bind(max.y)
-        .fetch_all(pool)
-        .await?
-        .iter()
-        .map(|row| -> Result<(i64, Coord)> {
-            let id: i64 = row.try_get("id")?;
-            let x: f64 = row.try_get("x")?;
-            let y: f64 = row.try_get("y")?;
-            let coord = Coord { x, y };
-            Ok((id, coord))
-        })
-        .try_collect()?;
-
+async fn update_elevations(
+    pool: &PgPool,
+    rows: HashMap<i64, Coord>,
+    retrieve_elevation: impl Fn(&Coord) -> Result<f64>,
+) -> Result<()> {
     let size = rows.len();
-    info!("Queried {} containing coords", size);
-
-    if size <= 0 {
-        info!("No coordinates, skipping");
-        return Ok(());
-    }
 
     let (node_ids, elevations): (Vec<i64>, Vec<f64>) = rows
         .into_iter()
         .map(|(node_id, coord)| -> Result<(i64, f64)> {
-            Ok((
-                node_id,
-                geotiff
-                    .get_value_at::<f64>(&coord, 0)
-                    .ok_or_else(|| anyhow!("Expected to find value at {:?}", coord))?,
-            ))
+            Ok((node_id, retrieve_elevation(&coord)?))
         })
         // try_fold might be okay here but cbf learning
         .fold(
@@ -234,6 +214,39 @@ async fn read_and_update_elevations(pool: &PgPool, tiff: &Path) -> Result<()> {
     info!("Updated {} elevations", updated);
 
     Ok(())
+}
+
+async fn query_containing_coords(pool: &PgPool, rect: Rect) -> Result<HashMap<i64, Coord>> {
+    info!("Querying containing coords");
+    let query = r#"
+        SELECT id, ST_X(coord) as x, ST_Y(coord) as Y FROM osm_node
+        WHERE elevation IS NULL AND coord IS NOT NULL
+        AND ST_Within(coord, ST_MakeEnvelope($1, $2, $3, $4, 4326))
+    "#;
+
+    let min = rect.min();
+    let max = rect.max();
+    let rows: HashMap<i64, Coord> = sqlx::query(query)
+        .bind(min.x)
+        .bind(min.y)
+        .bind(max.x)
+        .bind(max.y)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|row| -> Result<(i64, Coord)> {
+            let id: i64 = row.try_get("id")?;
+            let x: f64 = row.try_get("x")?;
+            let y: f64 = row.try_get("y")?;
+            let coord = Coord { x, y };
+            Ok((id, coord))
+        })
+        .try_collect()?;
+
+    let size = rows.len();
+    info!("Queried {} containing coords", size);
+
+    Ok(rows)
 }
 
 async fn query_node_ids(pool: &PgPool) -> Result<HashSet<i64>> {
