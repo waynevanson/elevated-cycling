@@ -12,7 +12,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::BufReader,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 async fn insert_node_ids(pool: &PgPool, nodes: Vec<i64>) -> Result<()> {
@@ -141,7 +141,6 @@ async fn main() -> Result<()> {
 
                     let file_in = BufReader::new(File::open(tiff)?);
                     let geotiff = geotiff::GeoTiff::read(file_in)?;
-
                     let rect = geotiff.model_extent();
 
                     let rows = query_containing_coords(&pool, rect).await?;
