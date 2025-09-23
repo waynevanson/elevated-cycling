@@ -7,6 +7,7 @@ use clap_verbosity_flag::Verbosity;
 use geo::{Coord, Rect};
 use itertools::Itertools;
 use log::{debug, info};
+use petgraph::prelude::UnGraphMap;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::{
     collections::{HashMap, HashSet},
@@ -139,8 +140,7 @@ async fn main() -> Result<()> {
                 for tiff in &tiffs {
                     info!("Reading elevations from {:?}", tiff);
 
-                    let file_in = BufReader::new(File::open(tiff)?);
-                    let geotiff = geotiff::GeoTiff::read(file_in)?;
+                    let geotiff = geotiff::GeoTiff::read(BufReader::new(File::open(tiff)?))?;
                     let rect = geotiff.model_extent();
 
                     let rows = query_containing_coords(&pool, rect).await?;
@@ -160,8 +160,81 @@ async fn main() -> Result<()> {
                 }
             }
         },
+
+        // Simple solution
+        //
+        // Query all the nodes into HashMap<NodeId, (Coord, Elevation)>
+        // Query the edges into UnGraphMap<NodeId, ()>
+        // Derive into GraphMap<NodeId, Gradient>
+        // Flat map into GraphMap<NodeId, NodeId>, which is the node to take to travel to the intersection
+        // Ride from home to bottom of biggest gradient finding path with lowest average gradient
+        // Ride from top of biggest gradient to home finding path with lowest average gradient
         SubCommand::Circuit { radius, x, y } => {
-            todo!()
+            // find the [radius] highest elevations from the given range in [radius] chunks
+            //
+            // find highest and lowest points. find the shortest path containing the biggest distances
+
+            // using a square for now because it's complicated with circles without doing the math.
+            // 1 radius = chunk, round up
+            let radius = (radius * 1_000.0).ceil() as i64;
+
+            // lets just get all the nodes in the area
+            // todo: am I working in projected coordinates?
+            let query = r#"
+                SELECT id, elevation FROM osm_node
+                WHERE ST_Within(
+                    coord,
+                    ST_Buffer(
+                        ST_SetSRID(ST_MakePoint($1, $2), 4326),
+                        $3
+                    )
+                ) AND elevation IS NOT NULL
+            "#;
+
+            // get related edges as undirected graph, then create directed graph for gradients.
+            // create graphmap of intersections with gradient diffs
+            // find the biggest diff and join it with the lowest diff.
+            let nodes: HashMap<i64, f64> = sqlx::query(query)
+                .bind(x)
+                .bind(y)
+                .bind(radius)
+                .fetch_all(&pool)
+                .await?
+                .iter()
+                .map(|row| -> Result<(i64, f64)> {
+                    let node_id: i64 = row.try_get("id")?;
+                    let elevation: f64 = row.try_get("elevation")?;
+                    Ok((node_id, elevation))
+                })
+                .try_collect()?;
+
+            let query = r#"
+                SELECT source_node_id, target_node_id FROM osm_node_edge
+                WHERE source_node_id = ANY($1::bigint[]) AND target_node_id = ANY($1::bigint[])
+            "#;
+
+            let edges: UnGraphMap<i64, ()> = sqlx::query(query)
+                .bind(nodes.keys().collect_vec())
+                .fetch_all(&pool)
+                .await?
+                .iter()
+                .map(|row| -> Result<(i64, i64, ())> {
+                    let source: i64 = row.try_get("source_node_id")?;
+                    let target: i64 = row.try_get("target_node_id")?;
+                    Ok((source, target, ()))
+                })
+                .try_collect()?;
+
+            info!(
+                "Found lots of stuff {}, {}",
+                nodes.len(),
+                edges.edge_count()
+            );
+
+            // find highest, current, and lowest point.
+            // we want to find shortest path from low to high
+
+            // nice got it all!
         }
     }
 
