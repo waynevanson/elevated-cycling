@@ -4,10 +4,14 @@ use crate::osm::{get_unweighted_cyclable_graphmap_from_elements, read_to_nodes_c
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
-use geo::{Coord, Rect};
+use geo::{Coord, Distance, Haversine, Rect};
+use indexmap::IndexMap;
 use itertools::Itertools;
 use log::{debug, info};
-use petgraph::prelude::UnGraphMap;
+use petgraph::{
+    graph::DiGraph,
+    prelude::{DiGraphMap, GraphMap, UnGraphMap},
+};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::{
     collections::{HashMap, HashSet},
@@ -165,7 +169,7 @@ async fn main() -> Result<()> {
         //
         // Query all the nodes into HashMap<NodeId, (Coord, Elevation)>
         // Query the edges into UnGraphMap<NodeId, ()>
-        // Derive into GraphMap<NodeId, Gradient>
+        // Derive into IndexMap<NodeId, Gradient>
         // Flat map into GraphMap<NodeId, NodeId>, which is the node to take to travel to the intersection
         // Ride from home to bottom of biggest gradient finding path with lowest average gradient
         // Ride from top of biggest gradient to home finding path with lowest average gradient
@@ -179,9 +183,13 @@ async fn main() -> Result<()> {
             let radius = (radius * 1_000.0).ceil() as i64;
 
             // lets just get all the nodes in the area
-            // todo: am I working in projected coordinates?
+            // todo: am I working in projected coordinates? Probably not since I save by unprojecting?
             let query = r#"
-                SELECT id, elevation FROM osm_node
+                SELECT
+                    id,
+                    ST_X(coord) as x,
+                    ST_Y as y,
+                    elevation FROM osm_node
                 WHERE ST_Within(
                     coord,
                     ST_Buffer(
@@ -189,22 +197,26 @@ async fn main() -> Result<()> {
                         $3
                     )
                 ) AND elevation IS NOT NULL
+                ORDER BY elevation DESC
             "#;
 
             // get related edges as undirected graph, then create directed graph for gradients.
             // create graphmap of intersections with gradient diffs
             // find the biggest diff and join it with the lowest diff.
-            let nodes: HashMap<i64, f64> = sqlx::query(query)
+            let nodes: IndexMap<i64, (Coord, f64)> = sqlx::query(query)
                 .bind(x)
                 .bind(y)
                 .bind(radius)
                 .fetch_all(&pool)
                 .await?
                 .iter()
-                .map(|row| -> Result<(i64, f64)> {
+                .map(|row| -> Result<_> {
                     let node_id: i64 = row.try_get("id")?;
+                    let x: f64 = row.try_get("x")?;
+                    let y: f64 = row.try_get("y")?;
+                    let coord = Coord { x, y };
                     let elevation: f64 = row.try_get("elevation")?;
-                    Ok((node_id, elevation))
+                    Ok((node_id, (coord, elevation)))
                 })
                 .try_collect()?;
 
@@ -225,11 +237,28 @@ async fn main() -> Result<()> {
                 })
                 .try_collect()?;
 
-            info!(
-                "Found lots of stuff {}, {}",
-                nodes.len(),
-                edges.edge_count()
-            );
+            let graph: DiGraphMap<i64, f64> = edges
+                .all_edges()
+                .map(|item| (item.0, item.1))
+                .map(|(source_node_id, target_node_id)| -> Result<_> {
+                    let source = nodes
+                        .get(&source_node_id)
+                        .ok_or_else(|| anyhow!("Expected to find source from node_id"))?;
+                    let target = nodes
+                        .get(&target_node_id)
+                        .ok_or_else(|| anyhow!("Expected to find target from node_id"))?;
+                    let distance = Haversine::distance(source.0.into(), target.0.into());
+                    let source_gradient = (target.1 - source.1) / distance;
+
+                    let source_edge = (source_node_id, target_node_id, source_gradient);
+                    let target_edge = (target_node_id, source_node_id, -source_gradient);
+                    return Ok([source_edge, target_edge]);
+                })
+                .flat_map(|result| match result {
+                    Err(err) => vec![Err(err)],
+                    Ok(ok) => vec![Ok(ok[0]), Ok(ok[1])],
+                })
+                .try_collect()?;
 
             // find highest, current, and lowest point.
             // we want to find shortest path from low to high

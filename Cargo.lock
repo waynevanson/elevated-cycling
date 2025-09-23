@@ -411,6 +411,7 @@ dependencies = [
  "futures",
  "geo",
  "geotiff",
+ "indexmap",
  "itertools 0.13.0",
  "len-trait",
  "log",
@@ -1091,9 +1092,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.7.0"
+version = "2.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62f822373a4fe84d4bb149bf54e584a7f4abec90e072ed49cda0edea5b95471f"
+checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.2",
