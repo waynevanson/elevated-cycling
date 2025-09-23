@@ -4,7 +4,7 @@ use crate::osm::{get_unweighted_cyclable_graphmap_from_elements, read_to_nodes_c
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
-use geo::{Coord, Distance, Haversine, Rect};
+use geo::{Coord, Distance, Haversine, Point, Rect};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use log::{debug, info};
@@ -188,7 +188,7 @@ async fn main() -> Result<()> {
                 SELECT
                     id,
                     ST_X(coord) as x,
-                    ST_Y as y,
+                    ST_Y(coord) as y,
                     elevation FROM osm_node
                 WHERE ST_Within(
                     coord,
@@ -220,6 +220,24 @@ async fn main() -> Result<()> {
                 })
                 .try_collect()?;
 
+            let origin = Point::from((x, y));
+            let origin_node_id = nodes
+                .iter()
+                .map(|(node_id, (coord, _))| (node_id, coord))
+                .fold(None::<(i64, f64)>, |accu, (next_node_id, coord)| {
+                    let next_distance = Haversine::distance(origin, coord.clone().into());
+
+                    accu.filter(|(_, prev_distance)| &next_distance > prev_distance)
+                        .or_else(|| Some((*next_node_id, next_distance)))
+                })
+                .ok_or_else(|| anyhow!("Expected to find the closest node_id to the origin"))?
+                .0;
+
+            let highest_node_id = nodes
+                .get_index(0)
+                .ok_or_else(|| anyhow!("Expected to find the highest node_id"))?
+                .0;
+
             let query = r#"
                 SELECT source_node_id, target_node_id FROM osm_node_edge
                 WHERE source_node_id = ANY($1::bigint[]) AND target_node_id = ANY($1::bigint[])
@@ -237,7 +255,7 @@ async fn main() -> Result<()> {
                 })
                 .try_collect()?;
 
-            let graph: DiGraphMap<i64, f64> = edges
+            let gradients: DiGraphMap<i64, f64> = edges
                 .all_edges()
                 .map(|item| (item.0, item.1))
                 .map(|(source_node_id, target_node_id)| -> Result<_> {
@@ -260,10 +278,8 @@ async fn main() -> Result<()> {
                 })
                 .try_collect()?;
 
-            // find highest, current, and lowest point.
-            // we want to find shortest path from low to high
-
-            // nice got it all!
+            // Ride from home to bottom of biggest gradient finding path with lowest average gradient
+            // Ride from top of biggest gradient to home finding path with lowest average gradient
         }
     }
 
