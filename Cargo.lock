@@ -411,6 +411,7 @@ dependencies = [
  "futures",
  "geo",
  "geotiff",
+ "hashbrown 0.15.2",
  "indexmap",
  "itertools 0.13.0",
  "len-trait",

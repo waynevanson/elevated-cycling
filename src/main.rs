@@ -1,5 +1,7 @@
+mod iter_ext;
 mod osm;
 
+use crate::iter_ext::IterExt;
 use crate::osm::{get_unweighted_cyclable_graphmap_from_elements, read_to_nodes_coord};
 use anyhow::{anyhow, Result};
 use clap::Parser;
@@ -9,8 +11,8 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use log::{debug, info};
 use petgraph::{
-    graph::DiGraph,
-    prelude::{DiGraphMap, GraphMap, UnGraphMap},
+    algo::dijkstra,
+    prelude::{DiGraphMap, UnGraphMap},
 };
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::{
@@ -200,6 +202,8 @@ async fn main() -> Result<()> {
                 ORDER BY elevation DESC
             "#;
 
+            info!("finding nodes");
+
             // get related edges as undirected graph, then create directed graph for gradients.
             // create graphmap of intersections with gradient diffs
             // find the biggest diff and join it with the lowest diff.
@@ -220,24 +224,27 @@ async fn main() -> Result<()> {
                 })
                 .try_collect()?;
 
-            let origin = Point::from((x, y));
+            info!("finding points");
+
+            let origin_point = Point::from((x, y));
             let origin_node_id = nodes
                 .iter()
-                .map(|(node_id, (coord, _))| (node_id, coord))
+                .map(|(node_id, (coord, _))| (*node_id, coord.clone()))
                 .fold(None::<(i64, f64)>, |accu, (next_node_id, coord)| {
-                    let next_distance = Haversine::distance(origin, coord.clone().into());
+                    let next_distance = Haversine::distance(origin_point, coord.into());
 
                     accu.filter(|(_, prev_distance)| &next_distance > prev_distance)
-                        .or_else(|| Some((*next_node_id, next_distance)))
+                        .or_else(|| Some((next_node_id, next_distance)))
                 })
                 .ok_or_else(|| anyhow!("Expected to find the closest node_id to the origin"))?
                 .0;
 
-            let highest_node_id = nodes
+            let highest_node_id = *nodes
                 .get_index(0)
                 .ok_or_else(|| anyhow!("Expected to find the highest node_id"))?
                 .0;
 
+            info!("finding edges");
             let query = r#"
                 SELECT source_node_id, target_node_id FROM osm_node_edge
                 WHERE source_node_id = ANY($1::bigint[]) AND target_node_id = ANY($1::bigint[])
@@ -255,6 +262,7 @@ async fn main() -> Result<()> {
                 })
                 .try_collect()?;
 
+            info!("finding gradients");
             let gradients: DiGraphMap<i64, f64> = edges
                 .all_edges()
                 .map(|item| (item.0, item.1))
@@ -262,14 +270,17 @@ async fn main() -> Result<()> {
                     let source = nodes
                         .get(&source_node_id)
                         .ok_or_else(|| anyhow!("Expected to find source from node_id"))?;
+
                     let target = nodes
                         .get(&target_node_id)
                         .ok_or_else(|| anyhow!("Expected to find target from node_id"))?;
+
                     let distance = Haversine::distance(source.0.into(), target.0.into());
                     let source_gradient = (target.1 - source.1) / distance;
 
                     let source_edge = (source_node_id, target_node_id, source_gradient);
                     let target_edge = (target_node_id, source_node_id, -source_gradient);
+
                     return Ok([source_edge, target_edge]);
                 })
                 .flat_map(|result| match result {
@@ -278,12 +289,85 @@ async fn main() -> Result<()> {
                 })
                 .try_collect()?;
 
+            info!("finding costs ascent");
+
+            let costs = dijkstra(
+                &gradients,
+                origin_node_id,
+                Some(highest_node_id),
+                |(_source_node_id, _target_node_id, gradient)| gradient.trunc() as i64,
+            );
+            info!("finding path ascent");
+
+            let ascent = dijkstra_path(&edges, costs, origin_node_id, highest_node_id);
+
+            info!("finding costs descent");
+            let costs = dijkstra(
+                &gradients,
+                highest_node_id,
+                Some(origin_node_id),
+                // we want some decline but not full decline
+                // punish when decline is too high
+                |(_source_node_id, _target_node_id, gradient)| {
+                    if gradient >= &0.0 {
+                        -gradient
+                    } else {
+                        gradient.powf(0.25).trunc()
+                    }
+                    .trunc() as i64
+                },
+            );
+
+            info!("finding path descent");
+            let descent = dijkstra_path(&edges, costs, highest_node_id, origin_node_id);
+
+            // join the paths, get the points
+
+            let paths = ascent
+                .into_iter()
+                .chain(descent)
+                .map(|node_id| nodes.get(&node_id).unwrap().0.x_y())
+                .collect_vec();
+
+            // return
+
+            info!("{:?}", paths)
+
+            // Flat map into GraphMap<NodeId, NodeId>, which is the node to take to travel to the intersection
+
             // Ride from home to bottom of biggest gradient finding path with lowest average gradient
             // Ride from top of biggest gradient to home finding path with lowest average gradient
         }
     }
 
     return Ok(());
+}
+
+// fiona is disrupting my time programming and tomorrow if she doesn't wake up that is okay
+fn dijkstra_path<T>(
+    edges: &UnGraphMap<i64, T>,
+    costs: hashbrown::HashMap<i64, i64>,
+    source_node_id: i64,
+    target_node_id: i64,
+) -> Vec<i64> {
+    let mut path = vec![source_node_id];
+
+    let mut latest = source_node_id;
+
+    while latest != target_node_id {
+        latest = edges
+            .neighbors(latest)
+            .filter(|neighbour_node_id| neighbour_node_id != &latest)
+            .find_first_nearest(
+                |neighbour_node_item| *costs.get(neighbour_node_item).unwrap(),
+                i64::MAX,
+            )
+            .unwrap();
+
+        path.push(latest);
+    }
+
+    path
 }
 
 async fn update_elevations(
